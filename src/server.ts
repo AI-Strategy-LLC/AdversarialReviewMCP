@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getAdapter } from "./adapters/index.js";
 import { runReview, ReviewInputSchema } from "./runner.js";
 import {
+  ISOLATION_MODES,
   REVIEWER_NAMES,
   SKILL_NAMES,
   type ReviewerName,
@@ -58,6 +59,13 @@ function formatReviewResult(result: Awaited<ReturnType<typeof runReview>>): stri
   const lines: string[] = [];
   lines.push(`provider: ${result.provider}`);
   lines.push(`model: ${result.model}`);
+  lines.push(`isolation: ${result.isolation}`);
+  if (result.reviewedRef) {
+    lines.push(`reviewed_ref: ${result.reviewedRef}${result.reviewedSha ? ` (${result.reviewedSha.slice(0, 12)})` : ""}`);
+  }
+  if (result.worktreePath) {
+    lines.push(`worktree_path: ${result.worktreePath} (removed after run)`);
+  }
   lines.push(`exit_code: ${result.exitCode}`);
   lines.push(`duration_s: ${result.durationS.toFixed(2)}`);
   if (result.reportPath) {
@@ -104,6 +112,7 @@ async function main(): Promise<void> {
 
   const reviewerEnum = z.enum([...REVIEWER_NAMES, "auto"] as const);
   const skillEnum = z.enum(SKILL_NAMES);
+  const isolationEnum = z.enum(ISOLATION_MODES);
 
   const adversarialReviewSchema = {
     skill: skillEnum.describe(
@@ -130,6 +139,17 @@ async function main(): Promise<void> {
       .max(3600)
       .optional()
       .describe("Per-run timeout in seconds. Default 900."),
+    ref: z
+      .string()
+      .optional()
+      .describe(
+        "Git ref to review (branch name, tag, sha). Default: HEAD of repo_path. Only meaningful with isolation='worktree'."
+      ),
+    isolation: isolationEnum
+      .optional()
+      .describe(
+        "How to isolate the reviewer from your working tree. 'worktree' (default) checks out a fresh git worktree at ref/HEAD in a tmpdir and points the reviewer there — refuses if your repo has uncommitted changes. 'none' points the reviewer at repo_path directly (reviewer sees your in-progress edits)."
+      ),
   };
 
   server.registerTool(
@@ -177,6 +197,8 @@ async function main(): Promise<void> {
           args: z.string().optional(),
           model: z.string().optional(),
           timeout_s: z.number().int().positive().max(3600).optional(),
+          ref: z.string().optional(),
+          isolation: isolationEnum.optional(),
         },
       },
       async (input) => {

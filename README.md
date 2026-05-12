@@ -86,18 +86,21 @@ Returns one row per reviewer with `installed`, `version`, `authenticated`,
 "no read-only sandbox flag — reviewer runs with whatever permissions the CLI
 grants").
 
-### `adversarial_review({ skill, reviewer, repo_path, args?, model?, timeout_s? })`
+### `adversarial_review({ skill, reviewer, repo_path, args?, model?, timeout_s?, ref?, isolation? })`
 
 Generic dispatch. `skill` and `reviewer` are enums; `repo_path` is validated;
-`args` and `model` are regex-validated; `timeout_s` defaults to 900.
+`args` and `model` are regex-validated; `timeout_s` defaults to 900;
+`isolation` defaults to `"worktree"`.
 
 Returns:
 
 - `provider` — which CLI actually ran
 - `model` — best-effort model identifier
+- `isolation` — `"worktree"` or `"none"` (echo of input)
+- `reviewed_ref` / `reviewed_sha` — what state the reviewer actually saw
+- `worktree_path` — path of the temporary worktree (already removed by the time the response returns; useful for log forensics)
 - `exit_code`
-- `report_path` — absolute path to the report the skill wrote, if found at
-  the skill's canonical location (e.g. `docs/reviews/DEEP_REVIEW_2026-05-12.md`)
+- `report_path` — absolute path to the report the skill wrote, **copied back into your `repo_path`** when isolation is `worktree`, so you can open it where you'd expect
 - `summary` — last ~30 lines of stdout
 - `raw_stdout` / `raw_stderr` — truncated to 16 KB
 - `duration_s`
@@ -108,6 +111,34 @@ Returns:
 
 `deep_review`, `branch_review`, `bdd_audit`, `honesty_audit`,
 `counter_patterns`, `coverage_audit` — same parameters minus `skill`.
+
+## Isolation — what the reviewer actually sees
+
+The server defaults to **worktree isolation**: before spawning the reviewer it
+runs `git worktree add --detach <tmpdir> <ref-or-HEAD>` against your repo and
+points the reviewer at the worktree, not at your working directory. After the
+reviewer finishes, the server copies any canonical-location report back into
+your `repo_path` (so `docs/reviews/DEEP_REVIEW_2026-05-12.md` lands where you'd
+expect) and removes the worktree.
+
+Why this matters: without isolation, the reviewer sees your in-progress edits,
+staged-but-uncommitted files, `node_modules/`, IDE temp files, `.env`
+overrides, and anything else that's in your working tree but not in the
+committed baseline. The reviewer's findings are then reviewing *your draft
+state*, not the state you're going to ship.
+
+Modes:
+
+| `isolation` | What the reviewer sees | Notes |
+|---|---|---|
+| `worktree` (default) | A fresh checkout of `ref` (or HEAD) in a tmpdir, with no working-tree edits | Refuses to run if your `repo_path` has uncommitted changes (commit or stash first; you'd be reviewing a state that doesn't match your tree). Pass `ref` to review a specific branch / tag / sha. Reports are copied back into `repo_path`. |
+| `none` | `repo_path` directly, including your uncommitted edits | Useful when you explicitly want a review of work-in-progress. `ref` is not allowed in this mode. |
+
+Worktree isolation does **not** sandbox the reviewer at the kernel level —
+the reviewer process still runs as your user with access to `~/.aws/`,
+`~/.ssh/`, etc. If you need true filesystem isolation (untrusted reviewer
+binary, multi-tenant CI, regulated env), run the reviewer in a container
+yourself and skip this server's worktree mode.
 
 ## Safety / threat surface
 
@@ -183,6 +214,11 @@ mcp/adversarial-review/
 
 ## Known limitations
 
+- **No kernel-level reviewer sandbox.** Worktree isolation prevents the
+  reviewer from seeing your uncommitted edits but does not stop the reviewer
+  process from reading other files your user can read. If that matters, run
+  the reviewer in a container yourself and use `isolation='none'` pointed at
+  the container's checkout.
 - **No MCP-server isolation in reviewers.** None of the supported CLIs has a
   clean "disable all my MCP servers for this run" flag today. If you trust
   the reviewer's MCP servers, this is fine. If you don't, configure the

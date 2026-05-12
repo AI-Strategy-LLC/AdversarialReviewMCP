@@ -20,6 +20,10 @@ export const REVIEWER_NAMES = [
 export type ReviewerName = (typeof REVIEWER_NAMES)[number];
 export type ReviewerSelector = ReviewerName | "auto";
 
+export const ISOLATION_MODES = ["worktree", "none"] as const;
+export type IsolationMode = (typeof ISOLATION_MODES)[number];
+export const DEFAULT_ISOLATION: IsolationMode = "worktree";
+
 export const AUTO_FALLBACK_ORDER: ReviewerName[] = [
   "codex",
   "gemini",
@@ -103,6 +107,10 @@ export interface ReviewResult {
   rawStderr: string;
   durationS: number;
   findingsCount?: number;
+  isolation: IsolationMode;
+  reviewedRef?: string;
+  reviewedSha?: string;
+  worktreePath?: string;
 }
 
 export const CANONICAL_REPORT_PATH: Record<SkillName, string> = {

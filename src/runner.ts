@@ -6,8 +6,11 @@ import { z } from "zod";
 import { getAdapter } from "./adapters/index.js";
 import {
   AUTO_FALLBACK_ORDER,
+  DEFAULT_ISOLATION,
+  ISOLATION_MODES,
   REVIEWER_NAMES,
   SKILL_NAMES,
+  type IsolationMode,
   type ReviewResult,
   type ReviewerName,
   type SkillName,
@@ -21,6 +24,16 @@ import {
   validateModel,
   validateRepoPath,
 } from "./safety.js";
+import {
+  assertCleanRepo,
+  assertGitRepo,
+  copyReportBack,
+  createWorktree,
+  removeWorktree,
+  resolveRef,
+  validateRef,
+  type WorktreeHandle,
+} from "./worktree.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +46,8 @@ export const ReviewInputSchema = z.object({
   args: z.string().optional(),
   model: z.string().optional(),
   timeout_s: z.number().int().positive().max(3600).optional(),
+  ref: z.string().optional(),
+  isolation: z.enum(ISOLATION_MODES).optional(),
 });
 
 export type ReviewInput = z.infer<typeof ReviewInputSchema>;
@@ -164,6 +179,14 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
   const repoPath = await validateRepoPath(input.repo_path, allowlist);
   const args = validateArgs(input.args);
   const model = validateModel(input.model);
+  const ref = validateRef(input.ref);
+  const isolation: IsolationMode = input.isolation ?? DEFAULT_ISOLATION;
+
+  if (ref && isolation === "none") {
+    throw new SafetyError(
+      "ref is only meaningful with isolation='worktree'. Either remove ref or set isolation='worktree'."
+    );
+  }
 
   const reviewer = await selectReviewer(input.reviewer);
   const adapter = getAdapter(reviewer);
@@ -181,57 +204,103 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
     );
   }
 
-  const template = await loadPromptTemplate(input.skill);
-  const prompt = renderPrompt(template, { REPO_PATH: repoPath, ARGS: args });
+  let worktree: WorktreeHandle | undefined;
+  let reviewerCwd = repoPath;
+  let reviewedRef: string | undefined;
+  let reviewedSha: string | undefined;
 
-  const cmd = adapter.buildCommand({
-    skill: input.skill,
-    repoPath,
-    prompt,
-    args,
-    model,
-  });
-
-  const timeoutMs = (input.timeout_s ?? 900) * 1000;
-  const spawned = await runSubprocess(
-    cmd.argv,
-    cmd.cwd,
-    cmd.env,
-    cmd.stdin,
-    timeoutMs
-  );
-
-  const parsed = adapter.parseOutput({
-    stdout: spawned.stdout,
-    stderr: spawned.stderr,
-    exitCode: spawned.exitCode,
-    repoPath,
-    skill: input.skill,
-  });
-
-  let reportPath: string | undefined;
-  if (parsed.reportPath) {
-    try {
-      reportPath = assertContained(repoPath, parsed.reportPath);
-      await fs.access(reportPath);
-    } catch {
-      reportPath = undefined;
+  if (isolation === "worktree") {
+    await assertGitRepo(repoPath);
+    if (!ref) {
+      // implicit HEAD: still require clean tree so the reviewer sees what's committed
+      await assertCleanRepo(repoPath);
+    }
+    worktree = await createWorktree(repoPath, ref);
+    reviewerCwd = worktree.path;
+    reviewedRef = worktree.ref;
+    reviewedSha = worktree.sha;
+  } else {
+    const resolved = await resolveRef(repoPath, "HEAD").catch(() => undefined);
+    if (resolved) {
+      reviewedRef = "(working tree)";
+      reviewedSha = resolved.sha;
     }
   }
 
-  const findingsCount = await countFindings(repoPath, input.skill);
+  try {
+    const template = await loadPromptTemplate(input.skill);
+    const prompt = renderPrompt(template, {
+      REPO_PATH: reviewerCwd,
+      ARGS: args,
+    });
 
-  return {
-    provider: reviewer,
-    model: parsed.modelUsed ?? model ?? "(default)",
-    exitCode: spawned.timedOut ? 124 : spawned.exitCode,
-    reportPath,
-    summary: spawned.timedOut
-      ? `(timeout after ${input.timeout_s ?? 900}s)\n${parsed.summary}`
-      : parsed.summary,
-    rawStdout: truncateStdout(spawned.stdout),
-    rawStderr: truncateStdout(spawned.stderr),
-    durationS: spawned.durationS,
-    findingsCount,
-  };
+    const cmd = adapter.buildCommand({
+      skill: input.skill,
+      repoPath: reviewerCwd,
+      prompt,
+      args,
+      model,
+    });
+
+    const timeoutMs = (input.timeout_s ?? 900) * 1000;
+    const spawned = await runSubprocess(
+      cmd.argv,
+      cmd.cwd,
+      cmd.env,
+      cmd.stdin,
+      timeoutMs
+    );
+
+    const parsed = adapter.parseOutput({
+      stdout: spawned.stdout,
+      stderr: spawned.stderr,
+      exitCode: spawned.exitCode,
+      repoPath: reviewerCwd,
+      skill: input.skill,
+    });
+
+    let reportPath: string | undefined;
+    if (parsed.reportPath) {
+      try {
+        const inSpawnDir = assertContained(reviewerCwd, parsed.reportPath);
+        await fs.access(inSpawnDir);
+        if (worktree) {
+          // copy from worktree back to the developer's repo
+          reportPath = await copyReportBack(
+            worktree.path,
+            repoPath,
+            inSpawnDir
+          );
+        } else {
+          reportPath = inSpawnDir;
+        }
+      } catch {
+        reportPath = undefined;
+      }
+    }
+
+    const findingsCount = await countFindings(repoPath, input.skill);
+
+    return {
+      provider: reviewer,
+      model: parsed.modelUsed ?? model ?? "(default)",
+      exitCode: spawned.timedOut ? 124 : spawned.exitCode,
+      reportPath,
+      summary: spawned.timedOut
+        ? `(timeout after ${input.timeout_s ?? 900}s)\n${parsed.summary}`
+        : parsed.summary,
+      rawStdout: truncateStdout(spawned.stdout),
+      rawStderr: truncateStdout(spawned.stderr),
+      durationS: spawned.durationS,
+      findingsCount,
+      isolation,
+      reviewedRef,
+      reviewedSha,
+      worktreePath: worktree?.path,
+    };
+  } finally {
+    if (worktree) {
+      await removeWorktree(worktree);
+    }
+  }
 }
