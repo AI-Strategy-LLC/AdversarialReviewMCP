@@ -1,0 +1,37 @@
+{
+  "name": "@agent-skills/adversarial-review-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that dispatches review skills (deep-review, honesty-audit, branch-review, bdd-audit, counter-patterns, coverage-audit) to a different AI CLI than the caller — the load-bearing 20% of the honesty-defense doctrine.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "adversarial-review-mcp": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist/",
+    "src/prompts/",
+    "README.md"
+  ]
+}
