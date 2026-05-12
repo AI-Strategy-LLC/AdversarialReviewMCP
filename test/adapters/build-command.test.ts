@@ -22,8 +22,33 @@ describe("buildCommand — all adapters × all skills produce safe argv", () => 
         for (const seg of cmd.argv) {
           expect(seg).not.toMatch(/^\s*$/);
         }
+        // Adapter buildCommand intentionally does NOT include the binary at
+        // argv[0] — the runner prepends adapter.binary before spawn. The
+        // first segment must therefore look like a flag or subcommand, never
+        // the binary name itself (regression guard — the original v0.1 ran
+        // spawn(cmd.argv[0], …) directly, which executed "exec" / "--yolo"
+        // / "run" literally instead of the binary).
+        expect(cmd.argv[0]).not.toBe(adapter.binary);
       });
     }
+  }
+});
+
+describe("runner-side spawn argv — adapter.binary prepended", () => {
+  // Mirrors the exact assembly in runner.ts so a future refactor that
+  // breaks the contract is caught here.
+  for (const reviewer of REVIEWER_NAMES) {
+    it(`${reviewer}: spawn argv starts with the binary`, () => {
+      const adapter = ADAPTERS[reviewer];
+      const cmd = adapter.buildCommand({
+        skill: "honesty-audit",
+        repoPath: REPO,
+        prompt: PROMPT,
+      });
+      const spawnArgv = [adapter.binary, ...cmd.argv];
+      expect(spawnArgv[0]).toBe(adapter.binary);
+      expect(spawnArgv.length).toBeGreaterThan(1);
+    });
   }
 });
 

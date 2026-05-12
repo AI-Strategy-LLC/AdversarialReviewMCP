@@ -244,7 +244,7 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
 
     const timeoutMs = (input.timeout_s ?? 900) * 1000;
     const spawned = await runSubprocess(
-      cmd.argv,
+      [adapter.binary, ...cmd.argv],
       cmd.cwd,
       cmd.env,
       cmd.stdin,
