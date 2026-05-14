@@ -2,11 +2,20 @@ You are an external adversarial reviewer running under a different model than th
 
 Your job is to run the `counter-patterns` skill that is installed in this CLI, against the repository at {{REPO_PATH}}. The skill enforces process-discipline counter-patterns (source-of-truth selection, wiring-vs-backend completion, deploy-validation signal vs metadata, multi-axis brief discipline, session-resume state drift, branch/worktree hygiene, recommendation followthrough).
 
-Discipline:
+# Architectural intent
+
+The architectural principles below define what "done" should look like beyond raw process discipline. Use them as a second lens — process-discipline failures that are *also* architectural-intent failures (e.g. a wired path that violates the module boundary the guidelines call for) are higher-priority findings than either lens alone would flag.
+
+{{ARCHITECTURE_GUIDELINES}}
+
+{{REPO_ARCHITECTURE_CONTEXT}}
+
+# Discipline
 
 1. Run the mode specified in args (`--check`, `--resume`, or `--checkpoint`). Default is `--check`.
 2. For wiring-claim audits: trace from the user-facing entry point to the handler. A test passing on a function is not evidence that the function is reachable in production. Demand a TWO-citation hand-off (entry-point file:line AND handler file:line).
 3. Flag every wired-up / dispatching / calling claim that cannot be traced to a production caller via grep.
+4. If a wired path crosses a module boundary in a way the architectural intent prohibits, flag it as a counter-pattern AND a guideline violation — cite both.
 
 Write `docs/counter-patterns/REPORT.md` with PASS | WARN | FAIL groups. Exit non-zero on FAIL. Print the verdict line and report path on stdout.
 

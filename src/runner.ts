@@ -34,6 +34,7 @@ import {
   validateRef,
   type WorktreeHandle,
 } from "./worktree.js";
+import { loadArchitectureContext } from "./guidance.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,11 +60,21 @@ async function loadPromptTemplate(skill: SkillName): Promise<string> {
 
 function renderPrompt(
   template: string,
-  vars: { REPO_PATH: string; ARGS: string }
+  vars: {
+    REPO_PATH: string;
+    ARGS: string;
+    ARCHITECTURE_GUIDELINES: string;
+    REPO_ARCHITECTURE_CONTEXT: string;
+  }
 ): string {
   return template
     .replace(/\{\{REPO_PATH\}\}/g, vars.REPO_PATH)
-    .replace(/\{\{ARGS\}\}/g, vars.ARGS || "(none)");
+    .replace(/\{\{ARGS\}\}/g, vars.ARGS || "(none)")
+    .replace(/\{\{ARCHITECTURE_GUIDELINES\}\}/g, vars.ARCHITECTURE_GUIDELINES)
+    .replace(
+      /\{\{REPO_ARCHITECTURE_CONTEXT\}\}/g,
+      vars.REPO_ARCHITECTURE_CONTEXT
+    );
 }
 
 async function selectReviewer(
@@ -229,9 +240,20 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
 
   try {
     const template = await loadPromptTemplate(input.skill);
+    const arch = await loadArchitectureContext(reviewerCwd);
+    if (arch.warnings.length > 0) {
+      // Surface guidance issues on stderr so they're visible in MCP logs but
+      // do not block the review (graceful degradation is the design intent).
+      for (const w of arch.warnings) {
+        // eslint-disable-next-line no-console
+        console.error(`adversarial-review: guidance warning: ${w}`);
+      }
+    }
     const prompt = renderPrompt(template, {
       REPO_PATH: reviewerCwd,
       ARGS: args,
+      ARCHITECTURE_GUIDELINES: arch.guidelines,
+      REPO_ARCHITECTURE_CONTEXT: arch.repoContext,
     });
 
     const cmd = adapter.buildCommand({

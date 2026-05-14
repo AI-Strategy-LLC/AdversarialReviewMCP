@@ -9,7 +9,7 @@
   },
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc && cp -R src/prompts dist/prompts",
+    "build": "tsc && mkdir -p dist/prompts dist/guidance && cp -R src/prompts/. dist/prompts/ && cp -R src/guidance/. dist/guidance/",
     "start": "node dist/server.js",
     "dev": "tsx src/server.ts",
     "test": "vitest run",

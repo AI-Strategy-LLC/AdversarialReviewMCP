@@ -35,6 +35,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+sync_guidance() {
+  # Pull the architectural-guidance docs into src/guidance/ if a canonical
+  # source is on disk. The sync is a no-op if DevTeamSwarm.app (or a
+  # developer's local DevTeamSwarmControl checkout) is not present — the
+  # MCP server still runs, with prompts that reference the guidance falling
+  # back to a brief stub. See bin/sync-guidance.sh for resolution order.
+  echo "==> Syncing architectural guidance into src/guidance/"
+  if ! bash "${SCRIPT_DIR}/bin/sync-guidance.sh"; then
+    echo "    sync-guidance.sh failed — continuing with whatever is in src/guidance/" >&2
+  fi
+}
+
 build_server() {
   echo "==> Installing dependencies and building TypeScript"
   cd "${SCRIPT_DIR}"
@@ -135,6 +147,7 @@ Reviewer prerequisites (per CLI you intend to use as a *reviewer*):
 EOF
 }
 
+sync_guidance
 build_server
 
 if [[ -z "${TARGETS}" ]]; then

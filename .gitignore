@@ -3,3 +3,12 @@ dist/
 *.log
 .DS_Store
 coverage/
+
+# Architectural guidance is distributed via DevTeamSwarm.app (or a developer's
+# local DevTeamSwarmControl checkout). It is proprietary and must not land in
+# this public repo. `bin/sync-guidance.sh` populates `src/guidance/` at
+# install time from whichever source is available; if none is, the MCP server
+# runs without architectural-intent injection (a graceful, degraded mode).
+src/guidance/*
+!src/guidance/.keep
+!src/guidance/README.md

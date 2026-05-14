@@ -66,6 +66,105 @@ crush              # configure provider in ~/.config/crush/crush.json
 # opencode / kilo: follow their docs
 ```
 
+## Architectural-intent injection
+
+The reviewer prompts for `deep-review`, `counter-patterns`, `bdd-audit`,
+`coverage-audit`, and `branch-review` include an "Architectural intent"
+section that biases the review toward a specific set of architectural
+principles instead of generic "is this shippable" hygiene. Concretely the
+reviewer is told to treat the principles as the standard the code should
+meet, and to flag every deviation as a candidate finding with a citation
+to the principle being violated.
+
+### Where the guidance comes from
+
+The canonical guidance is **proprietary content distributed via the
+DevTeamSwarm.app bundle**. It is not committed to this (public)
+repository. `src/guidance/` is `.gitignore`d. The bundled
+`bin/sync-guidance.sh` script populates it at install time from whichever
+source is present on disk, in this order (first match wins):
+
+1. `$DEVTEAMSWARM_GUIDANCE_PATH` — explicit override (CI, tests, "I know
+   what I'm doing").
+2. `/Applications/DevTeamSwarm.app/Contents/Resources/guidance/` — system
+   install on macOS.
+3. `$HOME/Applications/DevTeamSwarm.app/Contents/Resources/guidance/` —
+   user install on macOS.
+4. **License-API fetch** — RESERVED. Future AWS Lambda + license-key flow
+   for headless / CI / non-Mac users without the .app. Not implemented
+   today (the stub always returns "unresolved" and the resolver falls
+   through).
+5. `$HOME/Developer/DevTeamSwarm/DevTeamSwarmControl/guidance/` —
+   **maintainer-only** dev fallback. Gated behind
+   `DEVTEAMSWARM_USE_DEV_FALLBACK=1` so it cannot accidentally fire on a
+   contributor's machine that happens to have a coincidentally-named
+   directory.
+
+`bash install.sh --for <cli>` runs the sync automatically. If none of those
+paths resolves, the MCP server still runs — prompts that reference the
+guidance fall back to a short stub explaining what's missing, so the
+review proceeds without architectural-intent bias.
+
+Useful sub-commands:
+
+```bash
+bash bin/sync-guidance.sh              # refresh src/guidance/ from the resolved source
+bash bin/sync-guidance.sh --check      # CI / pre-commit drift check
+bash bin/sync-guidance.sh --list       # show pairs + state
+bash bin/sync-guidance.sh --where      # print the resolved source path
+```
+
+### Shipping guidance inside DevTeamSwarm.app
+
+The primary distribution channel is the .app bundle. To wire it up, the
+Xcode project for DevTeamSwarm.app must include a Run Script Build Phase
+that copies the canonical `DevTeamSwarmControl/guidance/` tree into
+`Contents/Resources/guidance/` of the built `.app`. Example phase:
+
+```bash
+set -euo pipefail
+SRC="${SRCROOT}/../DevTeamSwarmControl/guidance"
+DST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/guidance"
+if [ -d "${SRC}" ]; then
+  mkdir -p "${DST}"
+  rsync -a --delete "${SRC}/" "${DST}/"
+else
+  echo "warning: ${SRC} not found — built .app will ship without guidance"
+fi
+```
+
+Once the .app is installed (TestFlight, Mac App Store, direct download —
+whichever distribution channel gates your audience), the MCP server's
+sync script picks the guidance up automatically.
+
+### Per-repo opt-in: domain / pattern / scale
+
+`ARCHITECTURE_GUIDELINES.md` is the universal layer — always injected when
+present. For repo-specific bias, commit a `.adversarial-review/architecture.json`
+at the root of the **repo being reviewed** with any combination of
+`domain`, `pattern`, and `scale`:
+
+```json
+{
+  "domain": "cli-tool",
+  "pattern": "hexagonal",
+  "scale": "small-team"
+}
+```
+
+The values must match the basenames of files under
+`src/guidance/domains/`, `src/guidance/patterns/`, and `src/guidance/scale/`
+(e.g. `domains/cli-tool.md`, `patterns/hexagonal.md`, `scale/small-team.md`).
+The corresponding files are inlined into prompts via a
+`{{REPO_ARCHITECTURE_CONTEXT}}` slot. Each key is independent — omit any
+that don't apply. Misspellings surface as a warning on stderr and the
+review proceeds without that slice.
+
+This is a declaration of *intent* by the repo author: the reviewer is
+explicitly told to flag code that disagrees with the declared
+domain/pattern/scale. Mismatches between asserted intent and observed
+code are some of the highest-signal findings adversarial review produces.
+
 ## Allowlist (repo-path whitelist)
 
 By default the server will accept any absolute existing directory as
@@ -197,9 +296,12 @@ npm test
 ```
 mcp/adversarial-review/
   package.json, tsconfig.json, install.sh
+  bin/
+    sync-guidance.sh   # populate src/guidance/ from the canonical source
   src/
     server.ts          # MCP entrypoint, registers all tools
     runner.ts          # core dispatch — validate, spawn, parse, return
+    guidance.ts        # loader for vendored guidance + per-repo arch config
     types.ts           # shared TypeScript types
     safety.ts          # repo allowlist + args/model validators + containment
     adapters/
@@ -209,6 +311,11 @@ mcp/adversarial-review/
     prompts/
       deep-review.txt branch-review.txt bdd-audit.txt
       honesty-audit.txt counter-patterns.txt coverage-audit.txt
+    guidance/          # .gitignore'd except for README.md + .keep
+      ARCHITECTURE_GUIDELINES.md  # universal architecture principles
+      domains/<domain>.md         # api-service, cli-tool, …
+      patterns/<pattern>.md       # hexagonal, monolith, …
+      scale/<scale>.md            # personal, small-team, …
   test/adapters/*.test.ts
 ```
 
