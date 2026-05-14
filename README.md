@@ -5,9 +5,11 @@ An MCP server that dispatches review skills (`deep-review`, `branch-review`,
 **different AI CLI than the calling agent** — running on a different model,
 with no exposure to the prior context.
 
-This is the bridge that makes the "external adversarial review for
-load-bearing features" rule in `CLAUDE.md` mechanically enforceable instead
-of an aspiration.
+This is the bridge that turns "external adversarial review for load-bearing
+features" from an aspiration into a mechanically-enforceable habit. The
+companion review skills it dispatches live in the
+[AgentSkills](https://github.com/AI-Strategy-LLC/AgentSkills) repo; this
+repo is the dispatcher.
 
 ## Why this exists
 
@@ -42,16 +44,21 @@ directly in Pi rather than via this server.
 Prerequisites: Node ≥ 20, npm.
 
 ```bash
+git clone https://github.com/AI-Strategy-LLC/AdversarialReviewMCP
+cd AdversarialReviewMCP
 bash install.sh                  # build only, print client-wiring snippets
 bash install.sh --for claude     # build + register with Claude Code
 bash install.sh --for codex      # build + register with Codex
 bash install.sh --for claude,codex,gemini,cursor
 ```
 
-After installing, you also need to install the review skills into whichever
-CLI you intend to use as a *reviewer*. From the root of this repo:
+After installing this server, you also need to install the **review skills**
+into whichever CLI you intend to use as a *reviewer*. The skills live in
+the AgentSkills repo:
 
 ```bash
+git clone https://github.com/AI-Strategy-LLC/AgentSkills
+cd AgentSkills
 bash install.sh --for codex      # so codex has /deep-review, /honesty-audit, …
 bash install.sh --for gemini
 # etc

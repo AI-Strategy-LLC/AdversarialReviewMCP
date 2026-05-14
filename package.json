@@ -1,8 +1,12 @@
 {
-  "name": "@agent-skills/adversarial-review-mcp",
+  "name": "adversarial-review-mcp",
   "version": "0.1.0",
   "description": "MCP server that dispatches review skills (deep-review, honesty-audit, branch-review, bdd-audit, counter-patterns, coverage-audit) to a different AI CLI than the caller — the load-bearing 20% of the honesty-defense doctrine.",
-  "license": "MIT",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AI-Strategy-LLC/AdversarialReviewMCP.git"
+  },
   "type": "module",
   "bin": {
     "adversarial-review-mcp": "dist/server.js"
