@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
   Adapter,
   AuthState,
@@ -14,6 +17,29 @@ import {
 } from "./_helpers.js";
 
 const BINARY = "crush";
+
+/**
+ * Detect a configured Crush install. Crush resolves global config from
+ * `$XDG_CONFIG_HOME/crush/crush.json` (default `~/.config/crush/crush.json`);
+ * a non-empty `providers` block means the user has wired up at least one
+ * provider (with its key / base URL) without relying on env vars. Returns
+ * the configured provider names when present.
+ */
+async function detectCrushConfig(): Promise<string[] | undefined> {
+  const configHome =
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  const configPath = path.join(configHome, "crush", "crush.json");
+  try {
+    const raw = await readFile(configPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      providers?: Record<string, unknown>;
+    };
+    const providers = parsed.providers ? Object.keys(parsed.providers) : [];
+    return providers.length > 0 ? providers : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export const crushAdapter: Adapter = {
   name: "crush",
@@ -47,6 +73,13 @@ export const crushAdapter: Adapter = {
       if (process.env[k]) {
         return { authenticated: true, detail: `${k} present` };
       }
+    }
+    const providers = await detectCrushConfig();
+    if (providers) {
+      return {
+        authenticated: true,
+        detail: `crush.json configured (providers: ${providers.join(", ")})`,
+      };
     }
     return {
       authenticated: false,
