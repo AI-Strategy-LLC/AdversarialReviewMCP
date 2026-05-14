@@ -52,6 +52,26 @@ bash install.sh --for codex      # build + register with Codex
 bash install.sh --for claude,codex,gemini,cursor
 ```
 
+### Self-contained local deploy
+
+`install.sh` registers the MCP client against `dist/server.js` *in this
+checkout* — so the server depends on the checkout staying put, built, and
+with `node_modules/` intact. To cut that dependency:
+
+```bash
+npm install            # one-time: pulls in esbuild
+npm run deploy:local   # bundle + stage under ~/.local/share
+```
+
+`deploy:local` (see `bin/deploy-local.sh`) produces a single-file esbuild
+bundle — server + MCP SDK + zod, ~750 KB, no `node_modules/` — plus the
+`prompts/` and `guidance/` asset trees, under
+`${XDG_DATA_HOME:-~/.local/share}/adversarial-review-mcp/` (override with
+`$ADVERSARIAL_REVIEW_DEPLOY_DIR`). It smoke-tests the bundle before
+declaring success, then prints the one-time `claude mcp add` line. Point
+your MCP client at the bundled `server.mjs`; later redeploys reuse the same
+path, so no re-registration is needed.
+
 After installing this server, you also need to install the **review skills**
 into whichever CLI you intend to use as a *reviewer*. The skills live in
 the AgentSkills repo:
