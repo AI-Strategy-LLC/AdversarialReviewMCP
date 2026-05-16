@@ -77,6 +77,29 @@ function formatReviewResult(result: Awaited<ReturnType<typeof runReview>>): stri
     lines.push(`findings_count: ${result.findingsCount}`);
   }
   lines.push("");
+  lines.push("--- artifacts (review-mode write contract) ---");
+  lines.push(`write_intent: ${result.writeIntent}`);
+  if (result.artifacts.length === 0) {
+    lines.push("(no artifacts declared for this skill)");
+  } else {
+    for (const a of result.artifacts) {
+      const status = a.delimiterFound
+        ? `captured ${a.sizeBytes}B${a.truncated ? " (TRUNCATED)" : ""}`
+        : "NOT EMITTED — fall back to summary/raw_stdout";
+      lines.push(
+        `- id=${a.id} format=${a.format} canonical_path=${a.canonicalPath} :: ${status}`
+      );
+    }
+    lines.push(
+      "Contract: the calling agent should write each artifact's `content` to its `canonical_path` inside `repo_path`."
+    );
+  }
+  if (result.artifactWarnings.length > 0) {
+    lines.push("");
+    lines.push("--- artifact warnings ---");
+    for (const w of result.artifactWarnings) lines.push(`- ${w}`);
+  }
+  lines.push("");
   lines.push("--- summary (tail of reviewer stdout) ---");
   lines.push(result.summary || "(empty)");
   if (result.rawStderr && result.rawStderr.trim().length > 0) {
@@ -150,6 +173,12 @@ async function main(): Promise<void> {
       .describe(
         "How to isolate the reviewer from your working tree. 'worktree' (default) checks out a fresh git worktree at ref/HEAD in a tmpdir and points the reviewer there — refuses if your repo has uncommitted changes. 'none' points the reviewer at repo_path directly (reviewer sees your in-progress edits)."
       ),
+    write_artifacts: z
+      .boolean()
+      .optional()
+      .describe(
+        "Review-mode write contract. When true (default), the server writes captured artifacts to their canonical paths inside repo_path as a back-compat convenience (so report_path stays populated). When false, only `artifacts[].content` is returned and the calling agent is fully responsible for writing the files. The reviewer itself never writes — it runs in a read-only sandbox and emits each artifact wrapped in BEGIN/END delimiters on stdout per the contract."
+      ),
   };
 
   server.registerTool(
@@ -199,6 +228,7 @@ async function main(): Promise<void> {
           timeout_s: z.number().int().positive().max(3600).optional(),
           ref: z.string().optional(),
           isolation: isolationEnum.optional(),
+          write_artifacts: z.boolean().optional(),
         },
       },
       async (input) => {

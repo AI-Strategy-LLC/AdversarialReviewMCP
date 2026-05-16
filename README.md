@@ -226,12 +226,27 @@ Returns:
 - `reviewed_ref` / `reviewed_sha` — what state the reviewer actually saw
 - `worktree_path` — path of the temporary worktree (already removed by the time the response returns; useful for log forensics)
 - `exit_code`
-- `report_path` — absolute path to the report the skill wrote, **copied back into your `repo_path`** when isolation is `worktree`, so you can open it where you'd expect
-- `summary` — last ~30 lines of stdout
+- `report_path` — absolute path to the report. With `write_artifacts: true`
+  (default), the server writes the captured artifact to its canonical path
+  inside `repo_path` and this is that path. With `write_artifacts: false`, this
+  is empty — the caller is expected to write the file from `artifacts[].content`.
+- `artifacts` — one entry per declared artifact for the skill (per the
+  review-mode write contract — see Safety). Each entry has `id`,
+  `canonical_path` (relative to `repo_path`), `format` (`markdown`|`json`|`text`),
+  `content` (the captured body), `size_bytes`, `delimiter_found` (false if
+  the reviewer ignored the contract — fall back to `summary`/`raw_stdout`),
+  and `truncated` (true if the body exceeded the per-artifact 1 MB cap).
+- `write_intent` — always `"caller_should_write"`. Marker that the caller is
+  the contractually-responsible writer, even when `write_artifacts: true`
+  pre-wrote the files as a convenience.
+- `artifact_warnings` — non-fatal warnings (e.g. a `format: "json"` artifact
+  that didn't parse).
+- `summary` — last ~30 lines of stdout (the human-readable tail, *outside* the
+  artifact delimiters)
 - `raw_stdout` / `raw_stderr` — truncated to 16 KB
 - `duration_s`
-- `findings_count` — populated when the skill writes machine-readable
-  findings (today: `honesty-audit`'s `findings.json`)
+- `findings_count` — populated when the skill emits machine-readable
+  findings (today: `honesty-audit`'s `findings` artifact)
 
 ### Per-skill convenience tools
 
@@ -285,7 +300,25 @@ access to the user's repo. The mitigations baked in:
 5. **Stdout treated as untrusted.** `raw_stdout` is plain text; any
    "instructions" inside it have no executable effect. `report_path` is
    resolved and verified to be inside `repo_path` (no `../` escape) before
-   being returned.
+   being returned. The artifact extractor (see §"Review-mode write contract"
+   below) does string-match extraction only and never `eval`s or executes
+   captured content.
+5a. **Review-mode write contract.** The reviewer runs in a read-only sandbox
+    (codex `--sandbox read-only` where supported) and is instructed by its
+    prompt to emit each report artifact wrapped in skill-specific
+    BEGIN/END delimiters on stdout — it MUST NOT attempt file writes. The
+    server captures each delimited block, validates per-artifact format
+    (`json` blocks are JSON-parsed), and returns them as `artifacts[]` in
+    the response. By default (`write_artifacts: true`) the server also
+    writes each artifact to its canonical path inside `repo_path` as a
+    back-compat convenience — but the **contractual writer is the calling
+    agent**, which is why every response carries `write_intent: "caller_should_write"`.
+    The contract resolves a prior incoherence: prompts asked the reviewer
+    to write files, while the sandbox forbade it; calling agents had been
+    rescuing report content out of `raw_stdout` as a fragile undocumented
+    fallback. That fallback now has a documented home — `delimiter_found:
+    false` on an artifact signals the reviewer ignored the contract, in
+    which case the caller falls back to `summary` / `raw_stdout`.
 6. **Ambient auth only.** The server never reads or stores credentials. If
    `OPENAI_API_KEY` etc. aren't in env, the auth check fails and the run is
    refused with an instruction.
