@@ -17,7 +17,9 @@ The principles below describe how the codebase is supposed to be structured. Whe
 3. If a branch's diff violates the architectural intent above (e.g. introduces a direct dependency on something the guidelines say must be wrapped), flag it as part of the recommendation.
 4. Recommend merge / prune / PR action per branch with one-line justification.
 
-Write `CHANGES.md` at the repository root. At the end, print the recommendation table on stdout plus the path.
+Emit `CHANGES.md` per the ARTIFACT EMISSION CONTRACT below — do not attempt to write the file yourself. After the END marker, print the recommendation table on ordinary stdout plus the declared canonical path.
+
+{{ARTIFACT_CONTRACT}}
 
 Caller-forwarded args (validated): {{ARGS}}
 

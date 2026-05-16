@@ -35,6 +35,14 @@ import {
   type WorktreeHandle,
 } from "./worktree.js";
 import { loadArchitectureContext } from "./guidance.js";
+import {
+  CANONICAL_ARTIFACTS,
+  extractArtifacts,
+  renderArtifactContract,
+  validateArtifactFormat,
+  writeArtifacts,
+  type CapturedArtifact,
+} from "./artifacts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +57,15 @@ export const ReviewInputSchema = z.object({
   timeout_s: z.number().int().positive().max(3600).optional(),
   ref: z.string().optional(),
   isolation: z.enum(ISOLATION_MODES).optional(),
+  /**
+   * When true (default), the server writes captured artifacts to their
+   * canonical paths inside `repo_path` as a back-compat convenience — so
+   * legacy callers still find a populated `report_path` in the response.
+   * When false, the server returns artifact content only; the caller is
+   * fully responsible for writing the files per the
+   * "review-mode write contract".
+   */
+  write_artifacts: z.boolean().optional(),
 });
 
 export type ReviewInput = z.infer<typeof ReviewInputSchema>;
@@ -65,6 +82,7 @@ function renderPrompt(
     ARGS: string;
     ARCHITECTURE_GUIDELINES: string;
     REPO_ARCHITECTURE_CONTEXT: string;
+    ARTIFACT_CONTRACT: string;
   }
 ): string {
   return template
@@ -74,7 +92,8 @@ function renderPrompt(
     .replace(
       /\{\{REPO_ARCHITECTURE_CONTEXT\}\}/g,
       vars.REPO_ARCHITECTURE_CONTEXT
-    );
+    )
+    .replace(/\{\{ARTIFACT_CONTRACT\}\}/g, vars.ARTIFACT_CONTRACT);
 }
 
 async function selectReviewer(
@@ -172,9 +191,25 @@ function runSubprocess(
 
 async function countFindings(
   repoPath: string,
-  skill: SkillName
+  skill: SkillName,
+  captured: CapturedArtifact[]
 ): Promise<number | undefined> {
   if (skill !== "honesty-audit") return undefined;
+  // Prefer the captured artifact content — it's the freshest source and works
+  // even when write_artifacts was false. Fall back to the on-disk file for the
+  // legacy path (reviewer ignored the contract and wrote the file itself, or
+  // server-side write succeeded and this is being read after the fact).
+  const fromCapture = captured.find(
+    (a) => a.id === "findings" && a.delimiterFound
+  );
+  if (fromCapture) {
+    try {
+      const parsed = JSON.parse(fromCapture.content) as { findings?: unknown[] };
+      if (Array.isArray(parsed.findings)) return parsed.findings.length;
+    } catch {
+      // fall through to the on-disk attempt
+    }
+  }
   const findingsPath = path.join(repoPath, "docs/honesty-audit/findings.json");
   try {
     const raw = await fs.readFile(findingsPath, "utf8");
@@ -254,6 +289,7 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       ARGS: args,
       ARCHITECTURE_GUIDELINES: arch.guidelines,
       REPO_ARCHITECTURE_CONTEXT: arch.repoContext,
+      ARTIFACT_CONTRACT: renderArtifactContract(input.skill),
     });
 
     const cmd = adapter.buildCommand({
@@ -281,13 +317,45 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       skill: input.skill,
     });
 
+    // --- review-mode write contract ---
+    // The reviewer is instructed (via the ARTIFACT_CONTRACT block in the
+    // prompt) to emit each artifact wrapped in skill-specific delimiters on
+    // stdout. Capture them here. Per-artifact `delimiterFound: false` signals
+    // the reviewer ignored the contract — the caller can fall back to the
+    // raw_stdout / summary.
+    const captured = extractArtifacts(
+      spawned.stdout,
+      CANONICAL_ARTIFACTS[input.skill]
+    );
+    const artifactWarnings: string[] = [];
+    for (const a of captured) {
+      const w = validateArtifactFormat(a);
+      if (w) artifactWarnings.push(w);
+    }
+    const wantsServerWrite = input.write_artifacts ?? true;
+    let writtenPaths: string[] = [];
+    if (wantsServerWrite) {
+      try {
+        writtenPaths = await writeArtifacts(repoPath, captured);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        artifactWarnings.push(`server-side artifact write failed: ${msg}`);
+      }
+    }
+
+    // reportPath resolution, in priority order:
+    //   1. first server-written artifact (the new contract path)
+    //   2. parsed.reportPath fallback — reviewer ignored the contract and
+    //      wrote a file in the worktree the old way (use copyReportBack to
+    //      lift it out before the worktree is deleted)
     let reportPath: string | undefined;
-    if (parsed.reportPath) {
+    if (writtenPaths.length > 0) {
+      reportPath = writtenPaths[0];
+    } else if (parsed.reportPath) {
       try {
         const inSpawnDir = assertContained(reviewerCwd, parsed.reportPath);
         await fs.access(inSpawnDir);
         if (worktree) {
-          // copy from worktree back to the developer's repo
           reportPath = await copyReportBack(
             worktree.path,
             repoPath,
@@ -301,7 +369,7 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       }
     }
 
-    const findingsCount = await countFindings(repoPath, input.skill);
+    const findingsCount = await countFindings(repoPath, input.skill, captured);
 
     return {
       provider: reviewer,
@@ -319,6 +387,17 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       reviewedRef,
       reviewedSha,
       worktreePath: worktree?.path,
+      artifacts: captured.map((a) => ({
+        id: a.id,
+        canonicalPath: a.canonicalPath,
+        format: a.format,
+        content: a.content,
+        sizeBytes: a.sizeBytes,
+        delimiterFound: a.delimiterFound,
+        truncated: a.truncated,
+      })),
+      writeIntent: "caller_should_write",
+      artifactWarnings,
     };
   } finally {
     if (worktree) {

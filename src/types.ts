@@ -111,6 +111,50 @@ export interface ReviewResult {
   reviewedRef?: string;
   reviewedSha?: string;
   worktreePath?: string;
+  /**
+   * Per-artifact capture from the reviewer's stdout. Each entry corresponds
+   * to a CANONICAL_ARTIFACTS[skill] spec, in declaration order.
+   *
+   * Contract: the reviewer runs in a read-only sandbox and is instructed to
+   * emit each artifact wrapped in skill-specific BEGIN/END delimiters. The
+   * server captures the body and returns it here. The CALLING AGENT is
+   * responsible for writing each artifact's `content` to its `canonicalPath`
+   * inside `repo_path` (unless `write_artifacts` was true on the request, in
+   * which case the server already wrote them — `reportPath` will be
+   * populated for back-compat).
+   *
+   * `delimiterFound: false` means the reviewer did not emit the delimited
+   * block — the caller should fall back to parsing `rawStdout` / `summary`.
+   */
+  artifacts: CapturedArtifactSummary[];
+  /**
+   * Explicit marker telling the caller what they need to do with `artifacts`.
+   * Always `"caller_should_write"` for review-mode results — even when
+   * `write_artifacts` was true and the server already wrote them, the caller
+   * may want to re-write or relocate.
+   */
+  writeIntent: "caller_should_write";
+  /**
+   * Subset of `artifacts` warnings — e.g. `format=json` artifact that failed
+   * to parse. Empty array when no warnings.
+   */
+  artifactWarnings: string[];
+}
+
+/**
+ * Wire-shape of a captured artifact returned to the MCP caller. Mirrors
+ * `CapturedArtifact` in `src/artifacts.ts` but lives here so callers can
+ * type-check against `ReviewResult` without importing the implementation
+ * module.
+ */
+export interface CapturedArtifactSummary {
+  id: string;
+  canonicalPath: string;
+  format: "markdown" | "json" | "text";
+  content: string;
+  sizeBytes: number;
+  delimiterFound: boolean;
+  truncated: boolean;
 }
 
 export const CANONICAL_REPORT_PATH: Record<SkillName, string> = {
