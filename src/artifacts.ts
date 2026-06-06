@@ -201,7 +201,15 @@ export async function writeArtifacts(
     const target = path.resolve(repoPath, a.canonicalPath);
     const safe = assertContained(repoPath, target);
     await fs.mkdir(path.dirname(safe), { recursive: true });
-    await fs.writeFile(safe, a.content, "utf8");
+    // A truncated artifact would otherwise land on disk looking canonical and
+    // complete. Stamp a visible marker so the incompleteness survives into the
+    // written file — not just the result metadata. JSON is left untouched (a
+    // comment would break the parse; truncated JSON already fails validation).
+    let body = a.content;
+    if (a.truncated && a.format !== "json") {
+      body += `\n\n<!-- [adversarial-review] WARNING: artifact truncated at ${a.sizeBytes} bytes — content is INCOMPLETE. -->\n`;
+    }
+    await fs.writeFile(safe, body, "utf8");
     written.push(safe);
   }
   return written;
@@ -213,7 +221,10 @@ export async function writeArtifacts(
  * for the contract wording — the per-skill variation is only the delimiter
  * names + canonical paths.
  */
-export function renderArtifactContract(skill: SkillName): string {
+export function renderArtifactContract(
+  skill: SkillName,
+  readOnlySandbox = true
+): string {
   const artifacts = CANONICAL_ARTIFACTS[skill];
   if (!artifacts || artifacts.length === 0) {
     return "ARTIFACT EMISSION CONTRACT: this skill declares no artifacts.";
@@ -222,17 +233,24 @@ export function renderArtifactContract(skill: SkillName): string {
   lines.push("# ARTIFACT EMISSION CONTRACT — MANDATORY");
   lines.push("");
   lines.push(
-    "You are running inside a read-only sandbox. You MUST NOT attempt to write files —"
+    "You MUST NOT attempt to write files yourself. Instead, emit each artifact on"
   );
   lines.push(
-    "any such attempt will fail silently. Instead, emit each artifact on stdout"
+    "stdout wrapped in the delimiters listed below. The MCP server captures them"
   );
   lines.push(
-    "wrapped in the delimiters listed below. The MCP server captures them between the"
+    "between the delimiter pairs and writes them to disk (or returns them to the"
   );
-  lines.push(
-    "delimiter pairs and returns them to the calling agent, which writes the files."
-  );
+  lines.push("calling agent, which writes them).");
+  if (readOnlySandbox) {
+    // Only asserted when the adapter actually runs the reviewer read-only —
+    // claiming a sandbox that isn't there would be a false instruction.
+    lines.push("");
+    lines.push(
+      "This reviewer runs inside a read-only sandbox, so any file write would fail"
+    );
+    lines.push("anyway — emitting on stdout is the only way to return your output.");
+  }
   lines.push("");
   lines.push("Rules:");
   lines.push(

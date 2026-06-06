@@ -21,6 +21,7 @@ export const kiloAdapter: Adapter = {
   supportsReadOnlySandbox: false,
   supportsEphemeralSession: false,
   supportsDisablingMcpServers: false,
+  verifiesAuth: false,
 
   async probe(): Promise<ProbeResult> {
     const r = await execProbe(BINARY, ["--version"]);

@@ -50,6 +50,7 @@ export const codexAdapter: Adapter = {
   supportsReadOnlySandbox: true,
   supportsEphemeralSession: true,
   supportsDisablingMcpServers: false,
+  verifiesAuth: true,
 
   async probe(): Promise<ProbeResult> {
     const r = await execProbe(BINARY, ["--version"]);

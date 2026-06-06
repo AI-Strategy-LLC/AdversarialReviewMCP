@@ -11,10 +11,18 @@ import {
   REVIEWER_NAMES,
   SKILL_NAMES,
   type IsolationMode,
+  type ReviewArtifact,
   type ReviewResult,
   type ReviewerName,
   type SkillName,
 } from "./types.js";
+import {
+  CANONICAL_ARTIFACTS,
+  extractArtifacts,
+  renderArtifactContract,
+  validateArtifactFormat,
+  writeArtifacts,
+} from "./artifacts.js";
 import {
   SafetyError,
   assertContained,
@@ -49,6 +57,7 @@ export const ReviewInputSchema = z.object({
   timeout_s: z.number().int().positive().max(3600).optional(),
   ref: z.string().optional(),
   isolation: z.enum(ISOLATION_MODES).optional(),
+  write_artifacts: z.boolean().optional(),
 });
 
 export type ReviewInput = z.infer<typeof ReviewInputSchema>;
@@ -65,6 +74,7 @@ function renderPrompt(
     ARGS: string;
     ARCHITECTURE_GUIDELINES: string;
     REPO_ARCHITECTURE_CONTEXT: string;
+    ARTIFACT_CONTRACT: string;
   }
 ): string {
   return template
@@ -74,7 +84,8 @@ function renderPrompt(
     .replace(
       /\{\{REPO_ARCHITECTURE_CONTEXT\}\}/g,
       vars.REPO_ARCHITECTURE_CONTEXT
-    );
+    )
+    .replace(/\{\{ARTIFACT_CONTRACT\}\}/g, vars.ARTIFACT_CONTRACT);
 }
 
 async function selectReviewer(
@@ -254,6 +265,10 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       ARGS: args,
       ARCHITECTURE_GUIDELINES: arch.guidelines,
       REPO_ARCHITECTURE_CONTEXT: arch.repoContext,
+      ARTIFACT_CONTRACT: renderArtifactContract(
+        input.skill,
+        adapter.supportsReadOnlySandbox
+      ),
     });
 
     const cmd = adapter.buildCommand({
@@ -281,8 +296,54 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       skill: input.skill,
     });
 
+    // Primary path: capture artifacts the reviewer emitted on stdout per the
+    // ARTIFACT EMISSION CONTRACT, and (by default) write them to the developer's
+    // repo at their canonical paths. The file-write fallback below still handles
+    // a reviewer that wrote a file directly instead of emitting.
+    const specs = CANONICAL_ARTIFACTS[input.skill] ?? [];
+    const captured = extractArtifacts(spawned.stdout, specs);
+    const shouldWrite = input.write_artifacts ?? true;
+    let writtenPaths: string[] = [];
+    if (shouldWrite) {
+      try {
+        writtenPaths = await writeArtifacts(repoPath, captured);
+      } catch (err) {
+        // Graceful degradation: a write failure must not lose the review.
+        // eslint-disable-next-line no-console
+        console.error(
+          `adversarial-review: artifact write failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
+    const artifacts: ReviewArtifact[] = captured.map((a) => {
+      const target = path.resolve(repoPath, a.canonicalPath);
+      const written = writtenPaths.includes(target);
+      return {
+        id: a.id,
+        canonicalPath: a.canonicalPath,
+        format: a.format,
+        delimiterFound: a.delimiterFound,
+        sizeBytes: a.sizeBytes,
+        truncated: a.truncated,
+        written,
+        writtenPath: written ? target : undefined,
+        // Hand the body back only when we did not persist it, so the caller can
+        // write it; once on disk the caller reads it from the filesystem.
+        content: !written && a.delimiterFound ? a.content : undefined,
+        formatWarning: validateArtifactFormat(a),
+      };
+    });
+
+    // reportPath = the primary artifact's written location when we captured it;
+    // otherwise fall back to a report the reviewer wrote to disk directly.
     let reportPath: string | undefined;
-    if (parsed.reportPath) {
+    const primaryArtifact = artifacts[0];
+    if (primaryArtifact?.written && primaryArtifact.writtenPath) {
+      reportPath = primaryArtifact.writtenPath;
+    }
+    if (!reportPath && parsed.reportPath) {
       try {
         const inSpawnDir = assertContained(reviewerCwd, parsed.reportPath);
         await fs.access(inSpawnDir);
@@ -319,6 +380,7 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       reviewedRef,
       reviewedSha,
       worktreePath: worktree?.path,
+      artifacts,
     };
   } finally {
     if (worktree) {

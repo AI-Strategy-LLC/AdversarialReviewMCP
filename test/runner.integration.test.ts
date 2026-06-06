@@ -6,15 +6,27 @@
  * spawn, and output parsing — with child_process.spawn mocked so no live
  * reviewer CLI is required.
  *
- * Isolation mode is set to 'none' throughout so the git-worktree machinery
- * is bypassed (those paths have their own tests in worktree.test.ts).
+ * The first suite sets isolation to 'none' so the git-worktree machinery is
+ * bypassed (those units have their own tests in worktree.test.ts). The second
+ * suite ("worktree isolation") exercises the real default journey end-to-end
+ * against a throwaway git repo, with only the reviewer subprocess mocked.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+  afterAll,
+} from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
@@ -255,5 +267,225 @@ describe("runReview — integration (mocked subprocess)", () => {
     });
 
     expect(result.reportPath).toBeUndefined();
+  });
+
+  it("captures and writes an artifact the reviewer emits on stdout", async () => {
+    stubAdapter("codex");
+    const body = "# Deep Review\n\nLooks fine.";
+    const stdout = [
+      "chatter before",
+      "<<<ARTIFACT:deep-review:report BEGIN>>>",
+      body,
+      "<<<ARTIFACT:deep-review:report END>>>",
+      "summary tail",
+    ].join("\n");
+    spawnMock.mockImplementation(() => fakeChild(stdout, "", 0));
+
+    const result = await runReview({
+      skill: "deep-review",
+      reviewer: "codex",
+      repo_path: repoDir,
+      isolation: "none",
+    });
+
+    expect(result.artifacts).toHaveLength(1);
+    const [report] = result.artifacts!;
+    expect(report.id).toBe("report");
+    expect(report.delimiterFound).toBe(true);
+    expect(report.written).toBe(true);
+    expect(report.writtenPath).toMatch(
+      /docs\/reviews\/DEEP_REVIEW_\d{4}-\d{2}-\d{2}\.md$/
+    );
+    // reportPath is derived from the written artifact
+    expect(result.reportPath).toBe(report.writtenPath);
+    // and the body actually landed on disk
+    const onDisk = await fs.readFile(report.writtenPath!, "utf8");
+    expect(onDisk).toBe(body);
+    // content is not duplicated back to the caller once persisted
+    expect(report.content).toBeUndefined();
+  });
+
+  it("write_artifacts: false returns the body without touching disk", async () => {
+    stubAdapter("codex");
+    const body = "# Deep Review\n\nNot written.";
+    const stdout = [
+      "<<<ARTIFACT:deep-review:report BEGIN>>>",
+      body,
+      "<<<ARTIFACT:deep-review:report END>>>",
+    ].join("\n");
+    spawnMock.mockImplementation(() => fakeChild(stdout, "", 0));
+
+    const result = await runReview({
+      skill: "deep-review",
+      reviewer: "codex",
+      repo_path: repoDir,
+      isolation: "none",
+      write_artifacts: false,
+    });
+
+    const [report] = result.artifacts!;
+    expect(report.delimiterFound).toBe(true);
+    expect(report.written).toBe(false);
+    expect(report.content).toBe(body);
+    expect(result.reportPath).toBeUndefined();
+    // nothing was written under repo_path
+    await expect(
+      fs.access(path.join(repoDir, "docs/reviews"))
+    ).rejects.toThrow();
+  });
+
+  it("honesty-audit: captures both report and findings, and counts findings", async () => {
+    stubAdapter("codex");
+    const report = "# Honesty Audit\n";
+    const findings = '{"findings":[{"id":"a"},{"id":"b"}]}';
+    const stdout = [
+      "<<<ARTIFACT:honesty-audit:report BEGIN>>>",
+      report,
+      "<<<ARTIFACT:honesty-audit:report END>>>",
+      "<<<ARTIFACT:honesty-audit:findings BEGIN>>>",
+      findings,
+      "<<<ARTIFACT:honesty-audit:findings END>>>",
+    ].join("\n");
+    spawnMock.mockImplementation(() => fakeChild(stdout, "", 0));
+
+    const result = await runReview({
+      skill: "honesty-audit",
+      reviewer: "codex",
+      repo_path: repoDir,
+      isolation: "none",
+    });
+
+    expect(result.artifacts).toHaveLength(2);
+    expect(result.artifacts!.every((a) => a.written)).toBe(true);
+    const findingsArtifact = result.artifacts!.find((a) => a.id === "findings");
+    expect(findingsArtifact?.formatWarning).toBeUndefined();
+    // findings.json was written, so countFindings reads it back
+    expect(result.findingsCount).toBe(2);
+  });
+
+  it("surfaces a format warning when a json artifact does not parse", async () => {
+    stubAdapter("codex");
+    const stdout = [
+      "<<<ARTIFACT:honesty-audit:report BEGIN>>>",
+      "# r",
+      "<<<ARTIFACT:honesty-audit:report END>>>",
+      "<<<ARTIFACT:honesty-audit:findings BEGIN>>>",
+      "not valid json {",
+      "<<<ARTIFACT:honesty-audit:findings END>>>",
+    ].join("\n");
+    spawnMock.mockImplementation(() => fakeChild(stdout, "", 0));
+
+    const result = await runReview({
+      skill: "honesty-audit",
+      reviewer: "codex",
+      repo_path: repoDir,
+      isolation: "none",
+    });
+
+    const findingsArtifact = result.artifacts!.find((a) => a.id === "findings");
+    expect(findingsArtifact?.formatWarning).toContain("did not parse");
+  });
+});
+
+describe("runReview — worktree isolation (integration)", () => {
+  const execFileP = promisify(execFile);
+  let gitRepo: string;
+
+  async function git(gitArgs: string[]): Promise<void> {
+    await execFileP("git", gitArgs, { cwd: gitRepo });
+  }
+
+  beforeAll(async () => {
+    const root = await fs.realpath(os.tmpdir());
+    gitRepo = await fs.mkdtemp(path.join(root, "advrev-worktree-int-"));
+    await git(["init", "-q", "-b", "main"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test"]);
+    await fs.writeFile(path.join(gitRepo, "README.md"), "hello\n");
+    await git(["add", "README.md"]);
+    await git(["commit", "-q", "-m", "first"]);
+  });
+
+  afterAll(async () => {
+    if (gitRepo) await fs.rm(gitRepo, { recursive: true, force: true });
+  });
+
+  beforeEach(async () => {
+    spawnMock.mockReset();
+    // Each test starts from the committed, clean state.
+    await git(["reset", "-q", "--hard", "HEAD"]);
+    await git(["clean", "-fdq"]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function stub(reviewerName: "codex"): void {
+    const adapter = ADAPTERS[reviewerName];
+    vi.spyOn(adapter, "probe").mockResolvedValue({
+      installed: true,
+      binaryPath: reviewerName,
+      version: "test-stub",
+    });
+    vi.spyOn(adapter, "authCheck").mockResolvedValue({
+      authenticated: true,
+      detail: "stubbed for test",
+    });
+  }
+
+  it("runs in a fresh worktree, writes the emitted artifact back to repo_path, and cleans up", async () => {
+    stub("codex");
+    const body = "# Deep Review\n\nfrom the worktree path";
+    const stdout = [
+      "<<<ARTIFACT:deep-review:report BEGIN>>>",
+      body,
+      "<<<ARTIFACT:deep-review:report END>>>",
+    ].join("\n");
+    spawnMock.mockImplementation(() => fakeChild(stdout, "", 0));
+
+    const result = await runReview({
+      skill: "deep-review",
+      reviewer: "codex",
+      repo_path: gitRepo,
+      isolation: "worktree",
+    });
+
+    // The reviewer ran against a fresh worktree, not repo_path directly.
+    expect(result.isolation).toBe("worktree");
+    expect(result.worktreePath).toBeTruthy();
+    expect(result.reviewedSha).toMatch(/^[0-9a-f]{40}$/);
+    const [, , opts] = spawnMock.mock.calls[0] as [
+      string,
+      string[],
+      { cwd: string },
+    ];
+    expect(opts.cwd).toBe(result.worktreePath);
+    // The captured artifact was written back into the developer's repo_path.
+    const reportOnDisk = path.join(
+      gitRepo,
+      result.artifacts!.find((a) => a.id === "report")!.canonicalPath
+    );
+    expect(await fs.readFile(reportOnDisk, "utf8")).toBe(body);
+    expect(result.reportPath).toBe(reportOnDisk);
+    // The temporary worktree was removed afterward.
+    await expect(fs.access(result.worktreePath!)).rejects.toThrow();
+  });
+
+  it("refuses worktree isolation when the repo has uncommitted changes", async () => {
+    stub("codex");
+    spawnMock.mockImplementation(() => fakeChild("", "", 0));
+    await fs.writeFile(path.join(gitRepo, "dirty.txt"), "uncommitted\n");
+
+    await expect(
+      runReview({
+        skill: "deep-review",
+        reviewer: "codex",
+        repo_path: gitRepo,
+        isolation: "worktree",
+      })
+    ).rejects.toThrow(/uncommitted changes/);
+    // Refusal happens before the reviewer is ever spawned.
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

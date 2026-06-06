@@ -31,6 +31,11 @@ function statusNoteFor(adapterName: ReviewerName, installed: boolean): string | 
   if (!adapter.supportsEphemeralSession) {
     notes.push("no ephemeral-session flag — review may persist in CLI history");
   }
+  if (!adapter.verifiesAuth) {
+    notes.push(
+      "auth not verified — 'authenticated' is assumed from the ambient session; a real credential failure only surfaces at run time"
+    );
+  }
   return notes.length > 0 ? notes.join("; ") : undefined;
 }
 
@@ -75,6 +80,22 @@ function formatReviewResult(result: Awaited<ReturnType<typeof runReview>>): stri
   }
   if (result.findingsCount != null) {
     lines.push(`findings_count: ${result.findingsCount}`);
+  }
+  if (result.artifacts && result.artifacts.length > 0) {
+    lines.push("");
+    lines.push("--- artifacts ---");
+    for (const a of result.artifacts) {
+      const status = !a.delimiterFound
+        ? "not emitted"
+        : a.written
+          ? `written → ${a.writtenPath}`
+          : "captured (returned to caller, not written)";
+      let line = `${a.id} [${a.format}] ${a.canonicalPath}: ${status} (${a.sizeBytes} bytes${a.truncated ? ", truncated" : ""})`;
+      if (a.formatWarning) {
+        line += ` — warning: ${a.formatWarning}`;
+      }
+      lines.push(line);
+    }
   }
   lines.push("");
   lines.push("--- summary (tail of reviewer stdout) ---");
@@ -161,6 +182,12 @@ async function main(): Promise<void> {
       .describe(
         "How to isolate the reviewer from your working tree. 'worktree' (default) checks out a fresh git worktree at ref/HEAD in a tmpdir and points the reviewer there — refuses if your repo has uncommitted changes. 'none' points the reviewer at repo_path directly (reviewer sees your in-progress edits)."
       ),
+    write_artifacts: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true (default), the server writes each artifact the reviewer emits on stdout to its canonical path under repo_path. When false, the server leaves them on disk untouched and returns each artifact's body in the result for the calling agent to write itself."
+      ),
   };
 
   server.registerTool(
@@ -168,7 +195,7 @@ async function main(): Promise<void> {
     {
       title: "Adversarial review (generic dispatch)",
       description:
-        "Dispatch a review skill to an external CLI running a different model. Returns provider, model, exit code, the path of the report the skill wrote, and a brief summary. The report itself stays on disk; the caller reads it via the filesystem.",
+        "Dispatch a review skill to an external CLI running a different model. The reviewer emits its report (and any other artifacts) on stdout per the artifact-emission contract; the server captures them and, by default (write_artifacts=true), writes them to their canonical paths under repo_path. Returns provider, model, exit code, the captured artifacts (with the report path on disk), and a brief summary.",
       inputSchema: adversarialReviewSchema,
     },
     async (input) => {
@@ -210,6 +237,7 @@ async function main(): Promise<void> {
           timeout_s: z.number().int().positive().max(3600).optional(),
           ref: z.string().optional(),
           isolation: isolationEnum.optional(),
+          write_artifacts: z.boolean().optional(),
         },
       },
       async (input) => {

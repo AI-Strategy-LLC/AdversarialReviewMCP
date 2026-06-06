@@ -202,6 +202,19 @@ describe("writeArtifacts", () => {
     expect(written).toHaveLength(0);
   });
 
+  it("stamps an INCOMPLETE marker on a truncated markdown artifact", async () => {
+    const big = "x".repeat(5000);
+    const captured = extractArtifacts(
+      `${SPEC_REPORT.begin}\n${big}\n${SPEC_REPORT.end}`,
+      [SPEC_REPORT],
+      1024
+    );
+    expect(captured[0].truncated).toBe(true);
+    const written = await writeArtifacts(repo, captured);
+    const back = await fs.readFile(written[0], "utf8");
+    expect(back).toContain("INCOMPLETE");
+  });
+
   it("rejects a canonical path that escapes repo_path", async () => {
     const escape: ArtifactSpec = {
       ...SPEC_REPORT,
@@ -221,6 +234,14 @@ describe("renderArtifactContract", () => {
   it("includes the no-write instruction", () => {
     const out = renderArtifactContract("deep-review");
     expect(out).toContain("MUST NOT attempt to write files");
+  });
+  it("only claims a read-only sandbox when the reviewer actually has one", () => {
+    const sandboxed = renderArtifactContract("deep-review", true);
+    expect(sandboxed).toContain("read-only sandbox");
+    const notSandboxed = renderArtifactContract("deep-review", false);
+    // The no-write directive still stands, but the false sandbox claim is gone.
+    expect(notSandboxed).toContain("MUST NOT attempt to write files");
+    expect(notSandboxed).not.toContain("read-only sandbox");
   });
   it("lists every artifact's begin and end markers", () => {
     const out = renderArtifactContract("honesty-audit");

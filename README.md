@@ -8,8 +8,8 @@ with no exposure to the prior context.
 This is the bridge that turns "external adversarial review for load-bearing
 features" from an aspiration into a mechanically-enforceable habit. The
 companion review skills it dispatches live in the
-[AgentSkills](https://github.com/AI-Strategy-LLC/AgentSkills) repo; this
-repo is the dispatcher.
+[CVP Skills Library](https://github.com/cvp-accelerators/cvp-skills-library)
+(`skills/dev/global-scope/`); this server is the dispatcher.
 
 ## Why this exists
 
@@ -20,10 +20,13 @@ caught only by an external model with no exposure to the prior context. This
 server is the production mechanism for that pattern.
 
 The calling Claude session asks for `adversarial_review(skill=…, reviewer=…)`.
-The server spawns the reviewer CLI as a subprocess, points it at the repo,
-asks it to run the named review skill, and returns a structured result with
-the report path on disk. The calling session can then read that report
-directly.
+The server spawns the reviewer CLI as a subprocess, points it at the repo, and
+asks it to run the named review skill. The reviewer emits its report (and any
+other artifacts) on stdout wrapped in delimiters; the server captures them and,
+by default, writes each to its canonical path under `repo_path` and returns the
+report path on disk (pass `write_artifacts: false` to receive the artifact
+bodies in the result instead and write them yourself). The calling session can
+then read that report directly.
 
 ## Supported reviewers
 
@@ -44,8 +47,8 @@ directly in Pi rather than via this server.
 Prerequisites: Node ≥ 20, npm.
 
 ```bash
-git clone https://github.com/AI-Strategy-LLC/AdversarialReviewMCP
-cd AdversarialReviewMCP
+git clone https://github.com/cvp-accelerators/cvp-skills-library.git
+cd cvp-skills-library/mcp-servers/adversarial-review
 bash install.sh                  # build only, print client-wiring snippets
 bash install.sh --for claude     # build + register with Claude Code
 bash install.sh --for codex      # build + register with Codex
@@ -73,12 +76,11 @@ your MCP client at the bundled `server.mjs`; later redeploys reuse the same
 path, so no re-registration is needed.
 
 After installing this server, you also need to install the **review skills**
-into whichever CLI you intend to use as a *reviewer*. The skills live in
-the AgentSkills repo:
+into whichever CLI you intend to use as a *reviewer*. Install the CVP Skills
+Library for the reviewer CLIs:
 
 ```bash
-git clone https://github.com/AI-Strategy-LLC/AgentSkills
-cd AgentSkills
+# Install the skills library for your reviewer CLIs
 bash install.sh --for codex      # so codex has /deep-review, /honesty-audit, …
 bash install.sh --for gemini
 # etc
@@ -203,6 +205,13 @@ By default the server will accept any absolute existing directory as
 
 `repo_path` must be one of the listed paths or a subdirectory of one.
 
+Independently of the allowlist, a **hardcoded denylist** always refuses known
+credential stores — `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`,
+`~/.azure`, `~/.config/gcloud`, `/etc`, `/root` (and their subtrees) — plus the
+home directory and filesystem root themselves. This applies even with no
+allowlist configured, and even an explicit allowlist entry cannot override it,
+so a zero-config server never points a reviewer at a secret store.
+
 ## Tool surface
 
 ### `list_reviewers()`
@@ -212,11 +221,13 @@ Returns one row per reviewer with `installed`, `version`, `authenticated`,
 "no read-only sandbox flag — reviewer runs with whatever permissions the CLI
 grants").
 
-### `adversarial_review({ skill, reviewer, repo_path, args?, model?, timeout_s?, ref?, isolation? })`
+### `adversarial_review({ skill, reviewer, repo_path, args?, model?, timeout_s?, ref?, isolation?, write_artifacts? })`
 
 Generic dispatch. `skill` and `reviewer` are enums; `repo_path` is validated;
 `args` and `model` are regex-validated; `timeout_s` defaults to 900;
-`isolation` defaults to `"worktree"`.
+`isolation` defaults to `"worktree"`; `write_artifacts` defaults to `true`
+(server writes captured artifacts to their canonical paths under `repo_path`;
+set `false` to receive their bodies in the result instead).
 
 Returns:
 
@@ -226,27 +237,13 @@ Returns:
 - `reviewed_ref` / `reviewed_sha` — what state the reviewer actually saw
 - `worktree_path` — path of the temporary worktree (already removed by the time the response returns; useful for log forensics)
 - `exit_code`
-- `report_path` — absolute path to the report. With `write_artifacts: true`
-  (default), the server writes the captured artifact to its canonical path
-  inside `repo_path` and this is that path. With `write_artifacts: false`, this
-  is empty — the caller is expected to write the file from `artifacts[].content`.
-- `artifacts` — one entry per declared artifact for the skill (per the
-  review-mode write contract — see Safety). Each entry has `id`,
-  `canonical_path` (relative to `repo_path`), `format` (`markdown`|`json`|`text`),
-  `content` (the captured body), `size_bytes`, `delimiter_found` (false if
-  the reviewer ignored the contract — fall back to `summary`/`raw_stdout`),
-  and `truncated` (true if the body exceeded the per-artifact 1 MB cap).
-- `write_intent` — always `"caller_should_write"`. Marker that the caller is
-  the contractually-responsible writer, even when `write_artifacts: true`
-  pre-wrote the files as a convenience.
-- `artifact_warnings` — non-fatal warnings (e.g. a `format: "json"` artifact
-  that didn't parse).
-- `summary` — last ~30 lines of stdout (the human-readable tail, *outside* the
-  artifact delimiters)
+- `report_path` — absolute path to the primary report, under your `repo_path`, when the server wrote it (`write_artifacts: true`); falls back to a report the reviewer wrote to disk directly
+- `artifacts` — one entry per declared artifact the reviewer emitted: `id`, `canonical_path`, `format`, `delimiter_found`, `size_bytes`, `truncated`, `written` (+ `written_path`), `content` (only when not written), and an optional `format_warning` (e.g. a `findings.json` that didn't parse)
+- `summary` — last ~30 lines of stdout
 - `raw_stdout` / `raw_stderr` — truncated to 16 KB
 - `duration_s`
 - `findings_count` — populated when the skill emits machine-readable
-  findings (today: `honesty-audit`'s `findings` artifact)
+  findings (today: `honesty-audit`'s `findings.json`)
 
 ### Per-skill convenience tools
 
@@ -257,10 +254,11 @@ Returns:
 
 The server defaults to **worktree isolation**: before spawning the reviewer it
 runs `git worktree add --detach <tmpdir> <ref-or-HEAD>` against your repo and
-points the reviewer at the worktree, not at your working directory. After the
-reviewer finishes, the server copies any canonical-location report back into
-your `repo_path` (so `docs/reviews/DEEP_REVIEW_2026-05-12.md` lands where you'd
-expect) and removes the worktree.
+points the reviewer at the worktree, not at your working directory. The
+reviewer emits its artifacts on stdout; the server writes them into your
+`repo_path` at their canonical paths (so `docs/reviews/DEEP_REVIEW_2026-05-12.md`
+lands where you'd expect) — and, as a fallback, copies back any report a
+reviewer wrote to disk in the worktree instead. Then it removes the worktree.
 
 Why this matters: without isolation, the reviewer sees your in-progress edits,
 staged-but-uncommitted files, `node_modules/`, IDE temp files, `.env`
@@ -272,7 +270,7 @@ Modes:
 
 | `isolation` | What the reviewer sees | Notes |
 |---|---|---|
-| `worktree` (default) | A fresh checkout of `ref` (or HEAD) in a tmpdir, with no working-tree edits | Refuses to run if your `repo_path` has uncommitted changes (commit or stash first; you'd be reviewing a state that doesn't match your tree). Pass `ref` to review a specific branch / tag / sha. Reports are copied back into `repo_path`. |
+| `worktree` (default) | A fresh checkout of `ref` (or HEAD) in a tmpdir, with no working-tree edits | Refuses to run if your `repo_path` has uncommitted changes (commit or stash first; you'd be reviewing a state that doesn't match your tree). Pass `ref` to review a specific branch / tag / sha. Emitted artifacts are written into `repo_path` (a report a reviewer writes to disk in the worktree is copied back as a fallback). |
 | `none` | `repo_path` directly, including your uncommitted edits | Useful when you explicitly want a review of work-in-progress. `ref` is not allowed in this mode. |
 
 Worktree isolation does **not** sandbox the reviewer at the kernel level —
@@ -300,36 +298,23 @@ access to the user's repo. The mitigations baked in:
 5. **Stdout treated as untrusted.** `raw_stdout` is plain text; any
    "instructions" inside it have no executable effect. `report_path` is
    resolved and verified to be inside `repo_path` (no `../` escape) before
-   being returned. The artifact extractor (see §"Review-mode write contract"
-   below) does string-match extraction only and never `eval`s or executes
-   captured content.
-5a. **Review-mode write contract.** The reviewer runs in a read-only sandbox
-    (codex `--sandbox read-only` where supported) and is instructed by its
-    prompt to emit each report artifact wrapped in skill-specific
-    BEGIN/END delimiters on stdout — it MUST NOT attempt file writes. The
-    server captures each delimited block, validates per-artifact format
-    (`json` blocks are JSON-parsed), and returns them as `artifacts[]` in
-    the response. By default (`write_artifacts: true`) the server also
-    writes each artifact to its canonical path inside `repo_path` as a
-    back-compat convenience — but the **contractual writer is the calling
-    agent**, which is why every response carries `write_intent: "caller_should_write"`.
-    The contract resolves a prior incoherence: prompts asked the reviewer
-    to write files, while the sandbox forbade it; calling agents had been
-    rescuing report content out of `raw_stdout` as a fragile undocumented
-    fallback. That fallback now has a documented home — `delimiter_found:
-    false` on an artifact signals the reviewer ignored the contract, in
-    which case the caller falls back to `summary` / `raw_stdout`.
-6. **Ambient auth only.** The server never reads or stores credentials. If
-   `OPENAI_API_KEY` etc. aren't in env, the auth check fails and the run is
-   refused with an instruction.
+   being returned.
+6. **Ambient auth, best-effort verification.** The server never reads or
+   stores credentials. `codex`, `gemini`, and `crush` verify a credential
+   (env var / login session / config file) and the run is refused if none is
+   found. `opencode` and `kilo` have no headless auth probe, so they
+   optimistically report `authenticated: true` when the binary is present and a
+   real auth failure only surfaces at run time — `list_reviewers` flags this in
+   their `notes` ("auth not verified").
 
 What is **NOT** mitigated by this server (call out in your own threat model
 if relevant):
 
 - Reviewer CLIs that don't support read-only sandboxing can read or write any
-  file the host user has access to during the run. The repo allowlist
-  constrains what *path* the server points the reviewer at, but does not
-  constrain what the reviewer's own MCP servers might do once it's running.
+  file the host user has access to during the run. The repo allowlist and the
+  credential-store denylist constrain what *path* the server points the reviewer
+  at (and the denylist hard-refuses secret stores), but neither constrains where
+  an unsandboxed reviewer — or its own MCP servers — wanders once it's running.
 - The reviewer's model may itself be compromised, jailbroken, or producing
   hallucinated findings. The point of adversarial review is to surface gaps
   the original model missed; it is **not** to give the reviewer infallibility.
@@ -354,7 +339,7 @@ npm test
 ## Layout
 
 ```
-mcp/adversarial-review/
+mcp-servers/adversarial-review/
   package.json, tsconfig.json, install.sh
   bin/
     sync-guidance.sh   # populate src/guidance/ from the canonical source
@@ -390,11 +375,13 @@ mcp/adversarial-review/
   clean "disable all my MCP servers for this run" flag today. If you trust
   the reviewer's MCP servers, this is fine. If you don't, configure the
   reviewer to run without them.
-- **Adapter output parsing is heuristic.** Each CLI's stdout format is its
-  own; the adapter scans for the skill's canonical report path
-  (`docs/reviews/DEEP_REVIEW_YYYY-MM-DD.md`, etc.) and uses the tail of
-  stdout as a summary. If the reviewer wrote a report under a different name,
-  `report_path` will be empty even when a report exists — read the
+- **Artifact capture is delimiter-based; the file-path fallback is heuristic.**
+  The reviewer emits each artifact between exact `<<<ARTIFACT:…>>>` markers,
+  which the server extracts deterministically. Only when a reviewer ignores the
+  contract and writes a file directly does the adapter fall back to scanning
+  stdout for the skill's canonical report path
+  (`docs/reviews/DEEP_REVIEW_YYYY-MM-DD.md`, etc.); if that file used a different
+  name, `report_path` will be empty even when a report exists — read the
   `raw_stdout` for the actual path.
 - **`auto` selection is order-deterministic.** First installed +
   authenticated CLI in the order codex, gemini, crush, opencode, kilo wins.
