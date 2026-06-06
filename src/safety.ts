@@ -14,6 +14,11 @@ export class SafetyError extends Error {
   }
 }
 
+// Each space-separated token must look like a CLI flag (starts with -)
+// or a path/key (contains one of / . : = ,). This blocks prose sentences
+// like "ignore all previous instructions" from reaching reviewer prompts.
+const FLAG_SHAPED_RE = /^(-|[A-Za-z0-9]+[/.:=,])/;
+
 export function validateArgs(args: string | undefined): string {
   if (args == null || args === "") return "";
   if (args.length > 512) {
@@ -23,6 +28,22 @@ export function validateArgs(args: string | undefined): string {
     throw new SafetyError(
       "args contains a disallowed character. Allowed: alphanumerics, space, _ - . / = , :"
     );
+  }
+  // Guard against natural-language prompt injection: every token must be
+  // flag-shaped (e.g. --no-spec-to-code) or path-shaped (e.g. src/foo.ts:42).
+  const tokens = args.split(/\s+/).filter(Boolean);
+  if (tokens.length > 10) {
+    throw new SafetyError(
+      "args must not exceed 10 space-separated tokens"
+    );
+  }
+  for (const tok of tokens) {
+    if (!FLAG_SHAPED_RE.test(tok)) {
+      throw new SafetyError(
+        `args token "${tok}" does not look like a CLI flag or path. ` +
+          "args must be flag-style overrides (e.g. --no-spec-to-code) or file paths (e.g. src/foo.ts:42)."
+      );
+    }
   }
   return args;
 }
@@ -96,6 +117,16 @@ export async function validateRepoPath(
         `repo_path ${resolved} is not on the allowlist. Configure ADVERSARIAL_REVIEW_ALLOWLIST or ~/.config/agent-skills/adversarial-review/allowlist.txt to permit it.`
       );
     }
+  } else {
+    // No allowlist configured — any existing directory is accepted.
+    // This is intentional for local dev ergonomics, but means any
+    // directory (including ~/.ssh, ~/) can be passed as repo_path.
+    // Set ADVERSARIAL_REVIEW_ALLOWLIST or configure the allowlist file
+    // to restrict which repositories this server will review.
+    process.stderr.write(
+      "[adversarial-review] WARNING: no allowlist configured — any directory will be accepted as repo_path. " +
+        "Configure ADVERSARIAL_REVIEW_ALLOWLIST or ~/.config/agent-skills/adversarial-review/allowlist.txt to restrict access.\n"
+    );
   }
   return resolved;
 }

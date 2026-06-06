@@ -100,17 +100,52 @@ describe("crush adapter — has explicit --cwd", () => {
   });
 });
 
-describe("kilo adapter — has --workspace", () => {
+describe("kilo adapter — run subcommand with --dir and --auto", () => {
   const adapter = ADAPTERS.kilo;
-  it("argv includes --workspace <repo>", () => {
+  it("argv[0] is 'run' (subcommand, not binary)", () => {
     const cmd = adapter.buildCommand({
       skill: "bdd-audit",
       repoPath: REPO,
       prompt: "hi",
     });
-    expect(cmd.argv).toContain("--workspace");
-    const idx = cmd.argv.indexOf("--workspace");
+    expect(cmd.argv[0]).toBe("run");
+  });
+  it("argv includes --dir <repo>", () => {
+    const cmd = adapter.buildCommand({
+      skill: "bdd-audit",
+      repoPath: REPO,
+      prompt: "hi",
+    });
+    expect(cmd.argv).toContain("--dir");
+    const idx = cmd.argv.indexOf("--dir");
     expect(cmd.argv[idx + 1]).toBe(REPO);
+  });
+  it("argv includes --auto (non-interactive pipeline flag)", () => {
+    const cmd = adapter.buildCommand({
+      skill: "bdd-audit",
+      repoPath: REPO,
+      prompt: "hi",
+    });
+    expect(cmd.argv).toContain("--auto");
+  });
+  it("model override flows through via -m", () => {
+    const cmd = adapter.buildCommand({
+      skill: "bdd-audit",
+      repoPath: REPO,
+      prompt: "hi",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(cmd.argv).toContain("-m");
+    const idx = cmd.argv.indexOf("-m");
+    expect(cmd.argv[idx + 1]).toBe("anthropic/claude-sonnet-4-6");
+  });
+  it("does NOT use the removed --workspace flag", () => {
+    const cmd = adapter.buildCommand({
+      skill: "bdd-audit",
+      repoPath: REPO,
+      prompt: "hi",
+    });
+    expect(cmd.argv).not.toContain("--workspace");
   });
 });
 

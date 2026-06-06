@@ -1,0 +1,33 @@
+name: Dependency audit
+
+on:
+  schedule:
+    # Every Monday at 09:07 UTC
+    - cron: "7 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: npm audit (report only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        # Report moderate+ findings but do not fail the job — the known
+        # vulnerabilities are in @modelcontextprotocol/sdk transitive deps
+        # (hono, qs) and are not exploitable via stdio transport. Blocking
+        # CI on third-party SDK patch cycles would be noisier than helpful.
+        # Review the audit output manually each week and upgrade when a fix
+        # is available.
+        run: npm audit --audit-level=moderate || true

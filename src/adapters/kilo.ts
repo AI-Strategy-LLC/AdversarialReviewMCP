@@ -45,9 +45,12 @@ export const kiloAdapter: Adapter = {
   },
 
   buildCommand(input: BuildCommandInput): BuildCommandResult {
-    const argv = ["--workspace", input.repoPath];
+    // kilo run --dir <path> --auto [-m <model>] <message>
+    // --dir  sets the working directory for the session
+    // --auto auto-approves all permissions (required for pipeline/non-interactive use)
+    const argv = ["run", "--dir", input.repoPath, "--auto"];
     if (input.model) {
-      argv.push("--model", input.model);
+      argv.push("-m", input.model);
     }
     argv.push(input.prompt);
     return {
