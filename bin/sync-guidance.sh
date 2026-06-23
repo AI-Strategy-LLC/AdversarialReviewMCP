@@ -2,10 +2,11 @@
 # bin/sync-guidance.sh — refresh the architectural-guidance docs that the
 # adversarial-review MCP server injects into reviewer prompts.
 #
-# The guidance is proprietary content distributed via DevTeamSwarm — it is
-# deliberately not committed to this (public) repository. `src/guidance/` is
-# .gitignore'd; this script populates it at install time from whichever
-# source is present on disk.
+# The subset the server injects (ARCHITECTURE_GUIDELINES.md + domains/ +
+# patterns/ + scale/) is vendored (committed) under src/guidance/ so the repo
+# is self-contained. This script *refreshes* that vendored copy from whichever
+# canonical source is present on disk; if none is, it no-ops and the committed
+# copy is used as-is.
 #
 # Resolution order (first match wins):
 #   1. $DEVTEAMSWARM_GUIDANCE_PATH               explicit override (CI etc.)
@@ -166,7 +167,7 @@ src_missing_message() {
         dev_state="disabled (set DEVTEAMSWARM_USE_DEV_FALLBACK=1 to enable)"
     fi
     cat <<EOF
-sync-guidance.sh: no canonical guidance source found on disk — skipping.
+sync-guidance.sh: no canonical guidance source found on disk — skipping refresh.
   Looked for (in order):
     \$DEVTEAMSWARM_GUIDANCE_PATH                       (${DEVTEAMSWARM_GUIDANCE_PATH:-unset})
     /Applications/DevTeamSwarm.app/Contents/Resources/guidance
@@ -175,10 +176,10 @@ sync-guidance.sh: no canonical guidance source found on disk — skipping.
     \$HOME/Developer/DevTeamSwarm/DevTeamSwarmControl/guidance
                                                       (${dev_state})
 
-The MCP server will run, but prompts that reference architectural guidance
-will fall back to a brief stub. Install DevTeamSwarm.app to get the
-architectural-intent injection. (Maintainer with a DevTeamSwarmControl
-checkout: export DEVTEAMSWARM_USE_DEV_FALLBACK=1 and re-run.)
+This is fine: the vendored (committed) copy under src/guidance/ is used as-is,
+so architectural-intent injection still works. Sync only matters when you want
+to refresh that copy from a newer canonical source. (Maintainer with a
+DevTeamSwarmControl checkout: export DEVTEAMSWARM_USE_DEV_FALLBACK=1 and re-run.)
 EOF
 }
 
