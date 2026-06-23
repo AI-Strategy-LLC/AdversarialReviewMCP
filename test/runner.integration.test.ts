@@ -229,21 +229,23 @@ describe("runReview — integration (mocked subprocess)", () => {
     expect(result.provider).toBe("gemini");
   });
 
-  it("extracts report path from stdout when the reviewer emits it", async () => {
+  it("captures delimited artifacts from stdout and writes them under repo_path", async () => {
     stubAdapter("codex");
-    // Emit a line that matches the canonical honesty-audit report path pattern
-    const fakeReport = path.join(repoDir, "docs/honesty-audit/REPORT.md");
-    // Create the file so assertContained + fs.access passes
-    await fs.mkdir(path.dirname(fakeReport), { recursive: true });
-    await fs.writeFile(fakeReport, "# Honesty Audit\n");
+    const reportBody = "# Honesty Audit\n\nAll clear.";
+    const findingsBody = '{"findings":[{"id":"a"},{"id":"b"}]}';
+    // Emit both honesty-audit artifacts wrapped in the canonical delimiters.
+    const stdout = [
+      "Review complete.",
+      "<<<ARTIFACT:honesty-audit:report BEGIN>>>",
+      reportBody,
+      "<<<ARTIFACT:honesty-audit:report END>>>",
+      "summary chatter",
+      "<<<ARTIFACT:honesty-audit:findings BEGIN>>>",
+      findingsBody,
+      "<<<ARTIFACT:honesty-audit:findings END>>>",
+    ].join("\n");
 
-    spawnMock.mockImplementation(() =>
-      fakeChild(
-        `Review complete.\nReport written to ${fakeReport}\n`,
-        "",
-        0
-      )
-    );
+    spawnMock.mockImplementation(() => fakeChild(stdout, "", 0));
 
     const result = await runReview({
       skill: "honesty-audit",
@@ -252,10 +254,23 @@ describe("runReview — integration (mocked subprocess)", () => {
       isolation: "none",
     });
 
-    expect(result.reportPath).toBe(fakeReport);
+    const expectedReport = path.join(repoDir, "docs/honesty-audit/REPORT.md");
+    const expectedFindings = path.join(
+      repoDir,
+      "docs/honesty-audit/findings.json"
+    );
+    // reportPath points at the primary artifact's canonical location...
+    expect(result.reportPath).toBe(expectedReport);
+    // ...both artifacts are written...
+    expect(result.writtenArtifacts).toContain(expectedReport);
+    expect(result.writtenArtifacts).toContain(expectedFindings);
+    expect(await fs.readFile(expectedReport, "utf8")).toBe(reportBody);
+    expect(await fs.readFile(expectedFindings, "utf8")).toBe(findingsBody);
+    // ...and findings_count is derived from the captured JSON, not disk.
+    expect(result.findingsCount).toBe(2);
   });
 
-  it("returns reportPath undefined when reviewer does not emit a path", async () => {
+  it("returns reportPath undefined when reviewer emits no artifact delimiters", async () => {
     stubAdapter("codex");
     spawnMock.mockImplementation(() => fakeChild("some output\n", "", 0));
 
@@ -267,6 +282,7 @@ describe("runReview — integration (mocked subprocess)", () => {
     });
 
     expect(result.reportPath).toBeUndefined();
+    expect(result.writtenArtifacts).toEqual([]);
   });
 
   it("captures and writes an artifact the reviewer emits on stdout", async () => {

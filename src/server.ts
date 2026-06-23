@@ -76,25 +76,15 @@ function formatReviewResult(result: Awaited<ReturnType<typeof runReview>>): stri
   if (result.reportPath) {
     lines.push(`report_path: ${result.reportPath}`);
   } else {
-    lines.push("report_path: (none — reviewer did not emit a canonical-location report path)");
+    lines.push("report_path: (none — reviewer did not emit a report artifact)");
   }
   if (result.findingsCount != null) {
     lines.push(`findings_count: ${result.findingsCount}`);
   }
-  if (result.artifacts && result.artifacts.length > 0) {
-    lines.push("");
-    lines.push("--- artifacts ---");
-    for (const a of result.artifacts) {
-      const status = !a.delimiterFound
-        ? "not emitted"
-        : a.written
-          ? `written → ${a.writtenPath}`
-          : "captured (returned to caller, not written)";
-      let line = `${a.id} [${a.format}] ${a.canonicalPath}: ${status} (${a.sizeBytes} bytes${a.truncated ? ", truncated" : ""})`;
-      if (a.formatWarning) {
-        line += ` — warning: ${a.formatWarning}`;
-      }
-      lines.push(line);
+  if (result.writtenArtifacts && result.writtenArtifacts.length > 0) {
+    lines.push(`artifacts_written: ${result.writtenArtifacts.length}`);
+    for (const p of result.writtenArtifacts) {
+      lines.push(`  - ${p}`);
     }
   }
   lines.push("");

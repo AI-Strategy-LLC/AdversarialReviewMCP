@@ -1,4 +1,4 @@
-# src/guidance/ — architectural-intent injection (proprietary content)
+# src/guidance/ — architectural-intent injection
 
 The adversarial-review MCP server biases its reviewer prompts toward the
 user's intended architectural patterns rather than generic "is this
@@ -20,17 +20,23 @@ The reviewed repo opts in to the per-repo slices by committing a
 `.adversarial-review/architecture.json` with optional `domain`, `pattern`,
 and `scale` keys (see the MCP server's top-level README for the schema).
 
-## Why this directory is empty in git
+## What is committed vs. ignored
 
-The guidance files are **proprietary content distributed via DevTeamSwarm**.
-They are deliberately not committed to this public repository. Everything
-in `src/guidance/` except this README and the `.keep` sentinel is
-`.gitignore`d.
+The subset the server actually injects is **vendored (committed)** so this
+repo is self-contained and portable — no DevTeamSwarm.app install or
+DevTeamSwarmControl checkout is required at runtime:
 
-## How the directory gets populated
+- `ARCHITECTURE_GUIDELINES.md`
+- `domains/`, `patterns/`, `scale/`
 
-`bin/sync-guidance.sh` resolves the canonical source in this order (first
-match wins):
+Anything else under `src/guidance/` stays `.gitignore`d, so unconsumed
+DevTeamSwarmControl files (`HONESTY.md`, `COMMUNICATION_PROTOCOL.md`,
+`WORKING_METHODS.md`, etc.) are never published here.
+
+## How the directory gets refreshed
+
+`bin/sync-guidance.sh` re-pulls the vendored subset from a canonical source
+when one is present, resolving it in this order (first match wins):
 
 1. `$DEVTEAMSWARM_GUIDANCE_PATH` — explicit override (CI, tests).
 2. `/Applications/DevTeamSwarm.app/Contents/Resources/guidance/` — primary

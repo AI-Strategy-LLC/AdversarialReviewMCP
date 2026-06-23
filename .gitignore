@@ -4,11 +4,18 @@ dist/
 .DS_Store
 coverage/
 
-# Architectural guidance is distributed via DevTeamSwarm.app (or a developer's
-# local DevTeamSwarmControl checkout). It is proprietary and must not land in
-# this public repo. `bin/sync-guidance.sh` populates `src/guidance/` at
-# install time from whichever source is available; if none is, the MCP server
-# runs without architectural-intent injection (a graceful, degraded mode).
+# Architectural guidance. The subset the server actually injects
+# (ARCHITECTURE_GUIDELINES.md + domains/ + patterns/ + scale/) is vendored
+# (committed) below so this repo is self-contained and portable — no
+# DevTeamSwarm.app install or DevTeamSwarmControl checkout required at runtime.
+# `bin/sync-guidance.sh` still refreshes these from a canonical source when one
+# is present. Everything else under src/guidance/ stays ignored so unconsumed
+# DevTeamSwarmControl files (HONESTY.md, COMMUNICATION_PROTOCOL.md,
+# WORKING_METHODS.md, etc.) are never published here.
 src/guidance/*
 !src/guidance/.keep
 !src/guidance/README.md
+!src/guidance/ARCHITECTURE_GUIDELINES.md
+!src/guidance/domains/
+!src/guidance/patterns/
+!src/guidance/scale/

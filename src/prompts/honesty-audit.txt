@@ -8,7 +8,7 @@ Discipline:
 2. Do not suppress findings to make the result look cleaner. Empty `.honesty-audit-ignore` reasons are themselves findings.
 3. After the scan, surface any pattern of false positives the report should call out for future suppression tuning.
 
-Emit the two artefacts the skill specifies — `report` (docs/honesty-audit/REPORT.md) and `findings` (docs/honesty-audit/findings.json) — following the ARTIFACT EMISSION CONTRACT below. Do not write them to files yourself; emit each on stdout between its delimiters and the server captures them. Also print the exit summary on stdout (critical/high/medium/info counts plus PASS/FAIL verdict).
+Emit BOTH artefacts the skill specifies — the `report` (Markdown) and the `findings` (JSON) — per the ARTIFACT EMISSION CONTRACT below. You run read-only, so do NOT write either file yourself; the calling agent writes what you emit. The `findings` JSON must be a single object with a top-level `findings` array (one element per finding) so the server can report `findings_count`. Outside the artifact delimiters, print the exit summary on stdout (critical/high/medium/info counts plus PASS/FAIL verdict) as a short human-readable summary.
 
 {{ARTIFACT_CONTRACT}}
 

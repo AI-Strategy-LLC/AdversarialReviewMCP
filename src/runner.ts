@@ -25,7 +25,6 @@ import {
 } from "./artifacts.js";
 import {
   SafetyError,
-  assertContained,
   loadAllowlist,
   truncateStdout,
   validateArgs,
@@ -35,7 +34,6 @@ import {
 import {
   assertCleanRepo,
   assertGitRepo,
-  copyReportBack,
   createWorktree,
   removeWorktree,
   resolveRef,
@@ -43,6 +41,14 @@ import {
   type WorktreeHandle,
 } from "./worktree.js";
 import { loadArchitectureContext } from "./guidance.js";
+import {
+  CANONICAL_ARTIFACTS,
+  extractArtifacts,
+  renderArtifactContract,
+  validateArtifactFormat,
+  writeArtifacts,
+  type CapturedArtifact,
+} from "./artifacts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -181,15 +187,21 @@ function runSubprocess(
   });
 }
 
-async function countFindings(
-  repoPath: string,
-  skill: SkillName
-): Promise<number | undefined> {
-  if (skill !== "honesty-audit") return undefined;
-  const findingsPath = path.join(repoPath, "docs/honesty-audit/findings.json");
+/**
+ * Derive `findings_count` from a captured `findings` JSON artifact (currently
+ * only honesty-audit declares one). Reads the artifact body the reviewer
+ * emitted on stdout — NOT a file on disk — so it works identically under
+ * worktree isolation, where nothing the reviewer writes survives.
+ */
+function countFindingsFromArtifacts(
+  captured: CapturedArtifact[]
+): number | undefined {
+  const findings = captured.find(
+    (a) => a.id === "findings" && a.delimiterFound
+  );
+  if (!findings) return undefined;
   try {
-    const raw = await fs.readFile(findingsPath, "utf8");
-    const parsed = JSON.parse(raw) as { findings?: unknown[] };
+    const parsed = JSON.parse(findings.content) as { findings?: unknown[] };
     return Array.isArray(parsed.findings) ? parsed.findings.length : undefined;
   } catch {
     return undefined;
@@ -265,10 +277,7 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       ARGS: args,
       ARCHITECTURE_GUIDELINES: arch.guidelines,
       REPO_ARCHITECTURE_CONTEXT: arch.repoContext,
-      ARTIFACT_CONTRACT: renderArtifactContract(
-        input.skill,
-        adapter.supportsReadOnlySandbox
-      ),
+      ARTIFACT_CONTRACT: renderArtifactContract(input.skill),
     });
 
     const cmd = adapter.buildCommand({
@@ -296,73 +305,57 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       skill: input.skill,
     });
 
-    // Primary path: capture artifacts the reviewer emitted on stdout per the
-    // ARTIFACT EMISSION CONTRACT, and (by default) write them to the developer's
-    // repo at their canonical paths. The file-write fallback below still handles
-    // a reviewer that wrote a file directly instead of emitting.
-    const specs = CANONICAL_ARTIFACTS[input.skill] ?? [];
+    // Artifact capture. The reviewer runs read-only (under worktree isolation
+    // by default) and emits each artifact on stdout wrapped in the ARTIFACT
+    // EMISSION CONTRACT delimiters. We extract those bodies and write them into
+    // the developer's real repo (repoPath) — never the throwaway worktree,
+    // which is removed in `finally`.
+    const specs = CANONICAL_ARTIFACTS[input.skill];
     const captured = extractArtifacts(spawned.stdout, specs);
-    const shouldWrite = input.write_artifacts ?? true;
-    let writtenPaths: string[] = [];
-    if (shouldWrite) {
-      try {
-        writtenPaths = await writeArtifacts(repoPath, captured);
-      } catch (err) {
-        // Graceful degradation: a write failure must not lose the review.
-        // eslint-disable-next-line no-console
-        console.error(
-          `adversarial-review: artifact write failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`
+    const artifactWarnings: string[] = [];
+    for (const a of captured) {
+      if (!a.delimiterFound) {
+        artifactWarnings.push(
+          `artifact '${a.id}' (${a.canonicalPath}): no BEGIN/END delimiters found in reviewer stdout`
         );
+        continue;
       }
+      const formatWarning = validateArtifactFormat(a);
+      if (formatWarning) artifactWarnings.push(formatWarning);
     }
-    const artifacts: ReviewArtifact[] = captured.map((a) => {
-      const target = path.resolve(repoPath, a.canonicalPath);
-      const written = writtenPaths.includes(target);
-      return {
-        id: a.id,
-        canonicalPath: a.canonicalPath,
-        format: a.format,
-        delimiterFound: a.delimiterFound,
-        sizeBytes: a.sizeBytes,
-        truncated: a.truncated,
-        written,
-        writtenPath: written ? target : undefined,
-        // Hand the body back only when we did not persist it, so the caller can
-        // write it; once on disk the caller reads it from the filesystem.
-        content: !written && a.delimiterFound ? a.content : undefined,
-        formatWarning: validateArtifactFormat(a),
-      };
-    });
 
-    // reportPath = the primary artifact's written location when we captured it;
-    // otherwise fall back to a report the reviewer wrote to disk directly.
+    let writtenArtifacts: string[] = [];
+    try {
+      writtenArtifacts = await writeArtifacts(repoPath, captured);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      artifactWarnings.push(`failed to write artifacts: ${msg}`);
+    }
+
+    // The primary artifact (specs[0]) is the report; surface its path only if
+    // it was actually captured and written.
+    const primary = captured[0];
     let reportPath: string | undefined;
-    const primaryArtifact = artifacts[0];
-    if (primaryArtifact?.written && primaryArtifact.writtenPath) {
-      reportPath = primaryArtifact.writtenPath;
-    }
-    if (!reportPath && parsed.reportPath) {
-      try {
-        const inSpawnDir = assertContained(reviewerCwd, parsed.reportPath);
-        await fs.access(inSpawnDir);
-        if (worktree) {
-          // copy from worktree back to the developer's repo
-          reportPath = await copyReportBack(
-            worktree.path,
-            repoPath,
-            inSpawnDir
-          );
-        } else {
-          reportPath = inSpawnDir;
-        }
-      } catch {
-        reportPath = undefined;
-      }
+    if (primary?.delimiterFound) {
+      const primaryAbs = path.resolve(repoPath, primary.canonicalPath);
+      if (writtenArtifacts.includes(primaryAbs)) reportPath = primaryAbs;
     }
 
-    const findingsCount = await countFindings(repoPath, input.skill);
+    const findingsCount = countFindingsFromArtifacts(captured);
+
+    for (const w of artifactWarnings) {
+      // Surface on stderr so the warnings are visible in MCP logs without
+      // failing the run (graceful degradation — a missing artifact is itself
+      // a reportable signal, not a crash).
+      // eslint-disable-next-line no-console
+      console.error(`adversarial-review: ${w}`);
+    }
+    const mergedStderr = [
+      spawned.stderr,
+      ...artifactWarnings.map((w) => `artifact-warning: ${w}`),
+    ]
+      .filter((s) => s && s.length > 0)
+      .join("\n");
 
     return {
       provider: reviewer,
@@ -373,9 +366,10 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
         ? `(timeout after ${input.timeout_s ?? 900}s)\n${parsed.summary}`
         : parsed.summary,
       rawStdout: truncateStdout(spawned.stdout),
-      rawStderr: truncateStdout(spawned.stderr),
+      rawStderr: truncateStdout(mergedStderr),
       durationS: spawned.durationS,
       findingsCount,
+      writtenArtifacts,
       isolation,
       reviewedRef,
       reviewedSha,

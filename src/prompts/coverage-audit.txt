@@ -17,7 +17,7 @@ Coverage on the wrong layer is not coverage. The principles below describe how t
 3. Untestable-by-construction code (compile-time generated, FFI boundaries) should be filtered before the headline number — confirm the filter applied.
 4. Gaps on a module's public interface — the place the architectural guidelines say must be a clean black box — are higher-severity than gaps in app-layer code.
 
-Emit the `report` artifact (docs/coverage-audit/REPORT.md) per the ARTIFACT EMISSION CONTRACT below — emit it on stdout between the delimiters rather than writing a file. Also print the adjusted coverage percentage and the top high-impact gaps on stdout.
+Emit the report as the `report` artifact per the ARTIFACT EMISSION CONTRACT below. Outside the artifact delimiters, print the adjusted coverage percentage and the top high-impact gaps on stdout as a short human-readable summary.
 
 {{ARTIFACT_CONTRACT}}
 

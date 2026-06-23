@@ -145,6 +145,8 @@ export interface ReviewResult {
   rawStderr: string;
   durationS: number;
   findingsCount?: number;
+  /** Absolute paths of artifacts captured from reviewer stdout and written. */
+  writtenArtifacts?: string[];
   isolation: IsolationMode;
   reviewedRef?: string;
   reviewedSha?: string;
