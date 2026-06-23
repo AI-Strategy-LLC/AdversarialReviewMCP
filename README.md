@@ -105,11 +105,15 @@ to the principle being violated.
 
 ### Where the guidance comes from
 
-The canonical guidance is **proprietary content distributed via the
-DevTeamSwarm.app bundle**. It is not committed to this (public)
-repository. `src/guidance/` is `.gitignore`d. The bundled
-`bin/sync-guidance.sh` script populates it at install time from whichever
-source is present on disk, in this order (first match wins):
+The subset the server injects (`ARCHITECTURE_GUIDELINES.md` + `domains/` +
+`patterns/` + `scale/`) is **vendored (committed)** under `src/guidance/`, so
+the repo is self-contained and portable — no DevTeamSwarm.app install or
+DevTeamSwarmControl checkout is required at runtime. (Unconsumed
+DevTeamSwarmControl files such as `HONESTY.md` stay `.gitignore`d and are not
+published here.)
+
+`bin/sync-guidance.sh` **refreshes** the vendored copy from a canonical
+source when one is present, resolving it in this order (first match wins):
 
 1. `$DEVTEAMSWARM_GUIDANCE_PATH` — explicit override (CI, tests, "I know
    what I'm doing").
@@ -128,9 +132,9 @@ source is present on disk, in this order (first match wins):
    directory.
 
 `bash install.sh --for <cli>` runs the sync automatically. If none of those
-paths resolves, the MCP server still runs — prompts that reference the
-guidance fall back to a short stub explaining what's missing, so the
-review proceeds without architectural-intent bias.
+paths resolves, the sync is a no-op and the **committed** copy under
+`src/guidance/` is used as-is — so architectural-intent injection works out of
+the box on a fresh clone.
 
 Useful sub-commands:
 
@@ -371,7 +375,7 @@ mcp/adversarial-review/
     prompts/
       deep-review.txt branch-review.txt bdd-audit.txt
       honesty-audit.txt counter-patterns.txt coverage-audit.txt
-    guidance/          # .gitignore'd except for README.md + .keep
+    guidance/          # vendored subset committed; unconsumed files .gitignore'd
       ARCHITECTURE_GUIDELINES.md  # universal architecture principles
       domains/<domain>.md         # api-service, cli-tool, …
       patterns/<pattern>.md       # hexagonal, monolith, …
