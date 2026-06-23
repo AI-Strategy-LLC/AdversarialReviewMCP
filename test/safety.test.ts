@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
+import os from "node:os";
+import path from "node:path";
 import {
   SafetyError,
   assertContained,
+  protectedPathRefusal,
   truncateStdout,
   validateArgs,
   validateModel,
@@ -114,5 +117,35 @@ describe("validateRepoPath", () => {
     ).rejects.toBeInstanceOf(SafetyError);
     const p = await validateRepoPath("/tmp", ["/tmp"]);
     expect(p).toBe("/tmp");
+  });
+  it("refuses the home directory even with no allowlist (it exists)", async () => {
+    await expect(
+      validateRepoPath(os.homedir(), null)
+    ).rejects.toBeInstanceOf(SafetyError);
+  });
+});
+
+describe("protectedPathRefusal", () => {
+  it("refuses the home directory and filesystem root exactly", () => {
+    expect(protectedPathRefusal(os.homedir())).toBeDefined();
+    expect(protectedPathRefusal("/")).toBeDefined();
+  });
+  it("refuses credential stores and their subtrees", () => {
+    const ssh = path.join(os.homedir(), ".ssh");
+    expect(protectedPathRefusal(ssh)).toBeDefined();
+    expect(protectedPathRefusal(path.join(ssh, "keys"))).toBeDefined();
+    expect(protectedPathRefusal(path.join(os.homedir(), ".aws"))).toBeDefined();
+    expect(protectedPathRefusal("/etc")).toBeDefined();
+    expect(protectedPathRefusal("/etc/ssl")).toBeDefined();
+  });
+  it("allows ordinary repo paths, including subdirectories of home", () => {
+    expect(protectedPathRefusal("/tmp/myrepo")).toBeUndefined();
+    expect(
+      protectedPathRefusal(path.join(os.homedir(), "code", "project"))
+    ).toBeUndefined();
+    // A path that merely starts with the same prefix as ~/.ssh is not refused.
+    expect(
+      protectedPathRefusal(path.join(os.homedir(), ".sshfoo"))
+    ).toBeUndefined();
   });
 });

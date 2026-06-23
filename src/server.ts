@@ -31,6 +31,11 @@ function statusNoteFor(adapterName: ReviewerName, installed: boolean): string | 
   if (!adapter.supportsEphemeralSession) {
     notes.push("no ephemeral-session flag — review may persist in CLI history");
   }
+  if (!adapter.verifiesAuth) {
+    notes.push(
+      "auth not verified — 'authenticated' is assumed from the ambient session; a real credential failure only surfaces at run time"
+    );
+  }
   return notes.length > 0 ? notes.join("; ") : undefined;
 }
 
