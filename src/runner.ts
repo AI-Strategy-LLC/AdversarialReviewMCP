@@ -17,7 +17,6 @@ import {
 } from "./types.js";
 import {
   SafetyError,
-  assertContained,
   loadAllowlist,
   truncateStdout,
   validateArgs,
@@ -27,7 +26,6 @@ import {
 import {
   assertCleanRepo,
   assertGitRepo,
-  copyReportBack,
   createWorktree,
   removeWorktree,
   resolveRef,
@@ -35,6 +33,14 @@ import {
   type WorktreeHandle,
 } from "./worktree.js";
 import { loadArchitectureContext } from "./guidance.js";
+import {
+  CANONICAL_ARTIFACTS,
+  extractArtifacts,
+  renderArtifactContract,
+  validateArtifactFormat,
+  writeArtifacts,
+  type CapturedArtifact,
+} from "./artifacts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,6 +71,7 @@ function renderPrompt(
     ARGS: string;
     ARCHITECTURE_GUIDELINES: string;
     REPO_ARCHITECTURE_CONTEXT: string;
+    ARTIFACT_CONTRACT: string;
   }
 ): string {
   return template
@@ -74,7 +81,8 @@ function renderPrompt(
     .replace(
       /\{\{REPO_ARCHITECTURE_CONTEXT\}\}/g,
       vars.REPO_ARCHITECTURE_CONTEXT
-    );
+    )
+    .replace(/\{\{ARTIFACT_CONTRACT\}\}/g, vars.ARTIFACT_CONTRACT);
 }
 
 async function selectReviewer(
@@ -170,15 +178,21 @@ function runSubprocess(
   });
 }
 
-async function countFindings(
-  repoPath: string,
-  skill: SkillName
-): Promise<number | undefined> {
-  if (skill !== "honesty-audit") return undefined;
-  const findingsPath = path.join(repoPath, "docs/honesty-audit/findings.json");
+/**
+ * Derive `findings_count` from a captured `findings` JSON artifact (currently
+ * only honesty-audit declares one). Reads the artifact body the reviewer
+ * emitted on stdout — NOT a file on disk — so it works identically under
+ * worktree isolation, where nothing the reviewer writes survives.
+ */
+function countFindingsFromArtifacts(
+  captured: CapturedArtifact[]
+): number | undefined {
+  const findings = captured.find(
+    (a) => a.id === "findings" && a.delimiterFound
+  );
+  if (!findings) return undefined;
   try {
-    const raw = await fs.readFile(findingsPath, "utf8");
-    const parsed = JSON.parse(raw) as { findings?: unknown[] };
+    const parsed = JSON.parse(findings.content) as { findings?: unknown[] };
     return Array.isArray(parsed.findings) ? parsed.findings.length : undefined;
   } catch {
     return undefined;
@@ -254,6 +268,7 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       ARGS: args,
       ARCHITECTURE_GUIDELINES: arch.guidelines,
       REPO_ARCHITECTURE_CONTEXT: arch.repoContext,
+      ARTIFACT_CONTRACT: renderArtifactContract(input.skill),
     });
 
     const cmd = adapter.buildCommand({
@@ -281,27 +296,57 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
       skill: input.skill,
     });
 
-    let reportPath: string | undefined;
-    if (parsed.reportPath) {
-      try {
-        const inSpawnDir = assertContained(reviewerCwd, parsed.reportPath);
-        await fs.access(inSpawnDir);
-        if (worktree) {
-          // copy from worktree back to the developer's repo
-          reportPath = await copyReportBack(
-            worktree.path,
-            repoPath,
-            inSpawnDir
-          );
-        } else {
-          reportPath = inSpawnDir;
-        }
-      } catch {
-        reportPath = undefined;
+    // Artifact capture. The reviewer runs read-only (under worktree isolation
+    // by default) and emits each artifact on stdout wrapped in the ARTIFACT
+    // EMISSION CONTRACT delimiters. We extract those bodies and write them into
+    // the developer's real repo (repoPath) — never the throwaway worktree,
+    // which is removed in `finally`.
+    const specs = CANONICAL_ARTIFACTS[input.skill];
+    const captured = extractArtifacts(spawned.stdout, specs);
+    const artifactWarnings: string[] = [];
+    for (const a of captured) {
+      if (!a.delimiterFound) {
+        artifactWarnings.push(
+          `artifact '${a.id}' (${a.canonicalPath}): no BEGIN/END delimiters found in reviewer stdout`
+        );
+        continue;
       }
+      const formatWarning = validateArtifactFormat(a);
+      if (formatWarning) artifactWarnings.push(formatWarning);
     }
 
-    const findingsCount = await countFindings(repoPath, input.skill);
+    let writtenArtifacts: string[] = [];
+    try {
+      writtenArtifacts = await writeArtifacts(repoPath, captured);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      artifactWarnings.push(`failed to write artifacts: ${msg}`);
+    }
+
+    // The primary artifact (specs[0]) is the report; surface its path only if
+    // it was actually captured and written.
+    const primary = captured[0];
+    let reportPath: string | undefined;
+    if (primary?.delimiterFound) {
+      const primaryAbs = path.resolve(repoPath, primary.canonicalPath);
+      if (writtenArtifacts.includes(primaryAbs)) reportPath = primaryAbs;
+    }
+
+    const findingsCount = countFindingsFromArtifacts(captured);
+
+    for (const w of artifactWarnings) {
+      // Surface on stderr so the warnings are visible in MCP logs without
+      // failing the run (graceful degradation — a missing artifact is itself
+      // a reportable signal, not a crash).
+      // eslint-disable-next-line no-console
+      console.error(`adversarial-review: ${w}`);
+    }
+    const mergedStderr = [
+      spawned.stderr,
+      ...artifactWarnings.map((w) => `artifact-warning: ${w}`),
+    ]
+      .filter((s) => s && s.length > 0)
+      .join("\n");
 
     return {
       provider: reviewer,
@@ -312,9 +357,10 @@ export async function runReview(input: ReviewInput): Promise<ReviewResult> {
         ? `(timeout after ${input.timeout_s ?? 900}s)\n${parsed.summary}`
         : parsed.summary,
       rawStdout: truncateStdout(spawned.stdout),
-      rawStderr: truncateStdout(spawned.stderr),
+      rawStderr: truncateStdout(mergedStderr),
       durationS: spawned.durationS,
       findingsCount,
+      writtenArtifacts,
       isolation,
       reviewedRef,
       reviewedSha,

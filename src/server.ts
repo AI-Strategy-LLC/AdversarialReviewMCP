@@ -71,10 +71,16 @@ function formatReviewResult(result: Awaited<ReturnType<typeof runReview>>): stri
   if (result.reportPath) {
     lines.push(`report_path: ${result.reportPath}`);
   } else {
-    lines.push("report_path: (none — reviewer did not emit a canonical-location report path)");
+    lines.push("report_path: (none — reviewer did not emit a report artifact)");
   }
   if (result.findingsCount != null) {
     lines.push(`findings_count: ${result.findingsCount}`);
+  }
+  if (result.writtenArtifacts && result.writtenArtifacts.length > 0) {
+    lines.push(`artifacts_written: ${result.writtenArtifacts.length}`);
+    for (const p of result.writtenArtifacts) {
+      lines.push(`  - ${p}`);
+    }
   }
   lines.push("");
   lines.push("--- summary (tail of reviewer stdout) ---");
