@@ -87,6 +87,44 @@ export async function loadAllowlist(): Promise<string[] | null> {
   }
 }
 
+/**
+ * Hardcoded refusal for credential stores and filesystem roots. Pure (no fs),
+ * so it can be unit-tested directly. Enforced in validateRepoPath regardless of
+ * allowlist configuration: the server will never point a reviewer — sandboxed or
+ * not — at a known secret store or at the whole home/filesystem root. Returns a
+ * human-readable reason when the path is protected, otherwise undefined.
+ */
+export function protectedPathRefusal(resolved: string): string | undefined {
+  const home = os.homedir();
+  // Exact-match refusals: the entire home dir or the filesystem root is never a
+  // legitimate "repo" (subdirectories like ~/code/foo remain allowed).
+  const exact = [home, path.parse(resolved).root];
+  for (const e of exact) {
+    if (e && resolved === e) {
+      return `repo_path ${resolved} is a protected location (home directory or filesystem root) and cannot be reviewed.`;
+    }
+  }
+  // Subtree refusals: credential / secret stores. The dir itself and anything
+  // under it is refused.
+  const trees = [
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".kube",
+    ".docker",
+    ".azure",
+    path.join(".config", "gcloud"),
+  ]
+    .map((d) => path.join(home, d))
+    .concat(["/etc", "/private/etc", "/root", "/var/root"]);
+  for (const t of trees) {
+    if (resolved === t || resolved.startsWith(t + path.sep)) {
+      return `repo_path ${resolved} is inside a protected credential store (${t}) and cannot be reviewed — this is a hardcoded denylist that even an allowlist cannot override.`;
+    }
+  }
+  return undefined;
+}
+
 export async function validateRepoPath(
   repoPath: string,
   allowlist: string[] | null
@@ -106,6 +144,12 @@ export async function validateRepoPath(
   }
   if (!stat.isDirectory()) {
     throw new SafetyError(`repo_path is not a directory: ${resolved}`);
+  }
+  // Credential-store denylist — enforced before (and independent of) the
+  // allowlist, so even an explicitly-allowlisted secret dir is refused.
+  const refusal = protectedPathRefusal(resolved);
+  if (refusal) {
+    throw new SafetyError(refusal);
   }
   if (allowlist && allowlist.length > 0) {
     const allowed = allowlist.some(

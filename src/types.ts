@@ -80,6 +80,14 @@ export interface Adapter {
   supportsReadOnlySandbox: boolean;
   supportsEphemeralSession: boolean;
   supportsDisablingMcpServers: boolean;
+  /**
+   * Whether `authCheck()` actually verifies a credential (env var / config /
+   * login session) vs. optimistically assuming the ambient session is valid.
+   * When false, `authenticated: true` means "binary present, not verified" and
+   * a real auth failure only surfaces at run time. Surfaced in list_reviewers
+   * notes so the distinction is visible at the tool surface.
+   */
+  verifiesAuth: boolean;
 
   probe(): Promise<ProbeResult>;
   authCheck(): Promise<AuthState>;

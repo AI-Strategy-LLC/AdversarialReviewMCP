@@ -43,6 +43,7 @@ export const geminiAdapter: Adapter = {
   supportsReadOnlySandbox: false,
   supportsEphemeralSession: true,
   supportsDisablingMcpServers: false,
+  verifiesAuth: true,
 
   async probe(): Promise<ProbeResult> {
     const r = await execProbe(BINARY, ["--version"]);
