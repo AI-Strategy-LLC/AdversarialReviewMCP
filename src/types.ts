@@ -15,6 +15,7 @@ export const REVIEWER_NAMES = [
   "opencode",
   "crush",
   "kilo",
+  "glm",
 ] as const;
 
 export type ReviewerName = (typeof REVIEWER_NAMES)[number];
@@ -30,6 +31,7 @@ export const AUTO_FALLBACK_ORDER: ReviewerName[] = [
   "crush",
   "opencode",
   "kilo",
+  "glm",
 ];
 
 export interface ProbeResult {

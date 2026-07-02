@@ -141,7 +141,7 @@ async function main(): Promise<void> {
       "Which review skill to run on the reviewer side. Must already be installed in the chosen CLI via `bash install.sh --for <cli>`."
     ),
     reviewer: reviewerEnum.describe(
-      "Which CLI runs the review. 'auto' picks the first installed + authenticated CLI in order: codex, gemini, crush, opencode, kilo."
+      "Which CLI runs the review. 'auto' picks the first installed + authenticated CLI in order: codex, gemini, crush, opencode, kilo, glm."
     ),
     repo_path: z
       .string()

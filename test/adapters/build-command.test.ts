@@ -149,6 +149,43 @@ describe("kilo adapter — run subcommand with --dir and --auto", () => {
   });
 });
 
+describe("glm adapter — hosted on the opencode binary", () => {
+  const adapter = ADAPTERS.glm;
+  it("binary is opencode (GLM is a model, not a CLI)", () => {
+    expect(adapter.binary).toBe("opencode");
+  });
+  it("argv[0] is the 'run' subcommand, not the binary", () => {
+    const cmd = adapter.buildCommand({
+      skill: "deep-review",
+      repoPath: REPO,
+      prompt: "hi",
+    });
+    expect(cmd.argv[0]).toBe("run");
+  });
+  it("always applies a default provider/model when none is given", () => {
+    const cmd = adapter.buildCommand({
+      skill: "deep-review",
+      repoPath: REPO,
+      prompt: "hi",
+    });
+    expect(cmd.argv).toContain("--model");
+    const idx = cmd.argv.indexOf("--model");
+    // opencode needs a provider-prefixed reference (e.g. zai-coding-plan/...).
+    expect(cmd.argv[idx + 1]).toMatch(/^[\w-]+\/glm/);
+  });
+  it("explicit model override flows through via --model", () => {
+    const cmd = adapter.buildCommand({
+      skill: "deep-review",
+      repoPath: REPO,
+      prompt: "hi",
+      model: "zai/glm-4.6",
+    });
+    expect(cmd.argv).toContain("--model");
+    const idx = cmd.argv.indexOf("--model");
+    expect(cmd.argv[idx + 1]).toBe("zai/glm-4.6");
+  });
+});
+
 describe("gemini adapter — non-interactive", () => {
   const adapter = ADAPTERS.gemini;
   it("argv passes prompt via -p", () => {
