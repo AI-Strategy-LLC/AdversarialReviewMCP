@@ -34,6 +34,21 @@ directly.
 | opencode | `opencode` | per-provider config | no | no |
 | crush | `crush` | provider key in env or `~/.config/crush/crush.json` | no | yes (`run` subcommand) |
 | kilo | `kilo` | per-config | no | no |
+| glm | `opencode` | Z.AI login via `opencode auth login` | no | no |
+
+`glm` runs Z.ai's GLM models — a *model*, not a CLI, so it is hosted inside
+the **OpenCode** harness (which has first-class Z.AI support). It behaves like
+the `opencode` reviewer but always targets a GLM model.
+
+- **Setup:** `opencode auth login` → choose **Z.AI** (or **Z.AI Coding Plan**
+  if subscribed) → paste your key from the Z.AI console. Credentials land in
+  `~/.local/share/opencode/auth.json`, which the adapter reads to verify auth.
+- **Model:** defaults to `zai-coding-plan/glm-4.6` (subscription). Pay-as-you-go
+  users export `ADVERSARIAL_REVIEW_GLM_MODEL=zai/glm-4.6`, or pass `model` per
+  call. opencode requires the provider prefix (`zai-coding-plan/…` or `zai/…`);
+  a bare `glm-4.6` will not route.
+- **Skills:** install the review skills into OpenCode (e.g. `bash install.sh
+  --for opencode` in the AgentSkills repo), same as the `opencode` reviewer.
 
 Pi is intentionally not supported — Pi has no Agent tool and most review
 skills are thin stubs that need one. Pi users should run review skills

@@ -4,6 +4,7 @@ import { geminiAdapter } from "./gemini.js";
 import { opencodeAdapter } from "./opencode.js";
 import { crushAdapter } from "./crush.js";
 import { kiloAdapter } from "./kilo.js";
+import { glmAdapter } from "./glm.js";
 
 export const ADAPTERS: Record<ReviewerName, Adapter> = {
   codex: codexAdapter,
@@ -11,6 +12,7 @@ export const ADAPTERS: Record<ReviewerName, Adapter> = {
   opencode: opencodeAdapter,
   crush: crushAdapter,
   kilo: kiloAdapter,
+  glm: glmAdapter,
 };
 
 export function getAdapter(name: ReviewerName): Adapter {
