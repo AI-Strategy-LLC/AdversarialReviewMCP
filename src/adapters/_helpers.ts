@@ -13,11 +13,16 @@ export interface ExecResult {
   exitCode: number;
 }
 
-export async function execProbe(binary: string, args: string[]): Promise<ExecResult> {
+export async function execProbe(
+  binary: string,
+  args: string[],
+  timeoutMs: number = 5000
+): Promise<ExecResult> {
   try {
     const { stdout, stderr } = await execFileP(binary, args, {
-      timeout: 5000,
-      maxBuffer: 1024 * 1024,
+      timeout: timeoutMs,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, NO_COLOR: "1" },
     });
     return { stdout, stderr, exitCode: 0 };
   } catch (err) {
@@ -78,4 +83,29 @@ export function defaultParseOutput(input: ParseOutputInput): ParseOutputResult {
   const reportPath = findReportPath(input.skill, input.stdout, input.repoPath);
   const summary = tailLines(input.stdout, 30);
   return { reportPath, summary };
+}
+
+/**
+ * Pull model identifiers out of a CLI's model-listing output. Each line is
+ * expected to start with the id (the rest — display names, tabs, columns —
+ * is ignored). Lines that don't look like an identifier (banners, "Fetching
+ * available models...", blank lines) are dropped.
+ */
+export function parseModelListing(output: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.replace(/\x1b\[[0-9;]*m/g, "").trim();
+    if (!line) continue;
+    if (/\.\.\.$/.test(line)) continue; // "Fetching available models..."
+    const first = line.split(/[\s\t]+/)[0] ?? "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9_\-./:@#]*$/.test(first)) continue;
+    // A bare word ("Fetching", "Models:") is prose; every real model id
+    // carries a digit or a separator (gemini-4-argon-high, aivas/qwen3.6-…).
+    if (!/[0-9\-/._:@#]/.test(first)) continue;
+    if (seen.has(first)) continue;
+    seen.add(first);
+    out.push(first);
+  }
+  return out;
 }

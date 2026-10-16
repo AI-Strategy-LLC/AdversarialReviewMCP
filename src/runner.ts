@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getAdapter } from "./adapters/index.js";
 import {
   AUTO_FALLBACK_ORDER,
+  CLAUDE_HOST_ENV,
   DEFAULT_ISOLATION,
   ISOLATION_MODES,
   REVIEWER_NAMES,
@@ -89,7 +90,10 @@ async function selectReviewer(
   selector: ReviewerName | "auto"
 ): Promise<ReviewerName> {
   if (selector !== "auto") return selector;
+  // A Claude Code host must not auto-select Claude as its own reviewer.
+  const hostIsClaude = Boolean(process.env[CLAUDE_HOST_ENV]);
   for (const candidate of AUTO_FALLBACK_ORDER) {
+    if (candidate === "claude" && hostIsClaude) continue;
     const adapter = getAdapter(candidate);
     const probe = await adapter.probe();
     if (!probe.installed) continue;
@@ -98,7 +102,7 @@ async function selectReviewer(
     return candidate;
   }
   throw new SafetyError(
-    "No reviewer CLI is both installed and authenticated. Install at least one of: codex, gemini, crush, opencode, kilo."
+    "No reviewer CLI is both installed and authenticated. Install at least one of: codex, agy (Antigravity), copilot, crush, opencode, kilo."
   );
 }
 

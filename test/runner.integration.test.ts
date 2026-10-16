@@ -89,7 +89,9 @@ describe("runReview — integration (mocked subprocess)", () => {
   });
 
   // Stub probe + authCheck on an adapter so runReview doesn't shell out.
-  function stubAdapter(reviewerName: "kilo" | "codex" | "gemini" | "opencode" | "crush") {
+  function stubAdapter(
+    reviewerName: "kilo" | "codex" | "antigravity" | "opencode" | "crush" | "claude" | "copilot"
+  ) {
     const adapter = ADAPTERS[reviewerName];
     vi.spyOn(adapter, "probe").mockResolvedValue({
       installed: true,
@@ -202,19 +204,104 @@ describe("runReview — integration (mocked subprocess)", () => {
     expect(promptArg).toContain("--no-spec-to-code --mode=check");
   });
 
+  it("opencode: local-provider env injection reaches the spawned process", async () => {
+    const savedUrl = process.env.ADVERSARIAL_REVIEW_LOCAL_OPENAI_BASE_URL;
+    process.env.ADVERSARIAL_REVIEW_LOCAL_OPENAI_BASE_URL = "http://aivas-a.local:4000/v1";
+    try {
+      stubAdapter("opencode");
+      spawnMock.mockImplementation(() => fakeChild("", "", 0));
+
+      await runReview({
+        skill: "honesty-audit",
+        reviewer: "opencode",
+        repo_path: repoDir,
+        isolation: "none",
+        model: "local/qwen3.6-35b-nvfp4",
+      });
+
+      const [, args, opts] = spawnMock.mock.calls[0] as [
+        string,
+        string[],
+        { env?: Record<string, string> },
+      ];
+      expect(args).toContain("--auto");
+      expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeDefined();
+      const injected = JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT!) as {
+        provider: { local: { options: { baseURL: string } } };
+      };
+      expect(injected.provider.local.options.baseURL).toBe("http://aivas-a.local:4000/v1");
+    } finally {
+      if (savedUrl == null) delete process.env.ADVERSARIAL_REVIEW_LOCAL_OPENAI_BASE_URL;
+      else process.env.ADVERSARIAL_REVIEW_LOCAL_OPENAI_BASE_URL = savedUrl;
+    }
+  });
+
+  it("auto: never selects claude when the host is Claude Code (CLAUDECODE set)", async () => {
+    const savedHost = process.env.CLAUDECODE;
+    process.env.CLAUDECODE = "1";
+    try {
+      // Only claude is installed + authenticated.
+      for (const name of Object.keys(ADAPTERS) as Array<keyof typeof ADAPTERS>) {
+        if (name === "claude") continue;
+        vi.spyOn(ADAPTERS[name], "probe").mockResolvedValue({ installed: false });
+      }
+      stubAdapter("claude");
+      spawnMock.mockImplementation(() => fakeChild("", "", 0));
+
+      await expect(
+        runReview({
+          skill: "honesty-audit",
+          reviewer: "auto",
+          repo_path: repoDir,
+          isolation: "none",
+        })
+      ).rejects.toThrow(/No reviewer CLI is both installed and authenticated/);
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      if (savedHost == null) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = savedHost;
+    }
+  });
+
+  it("auto: selects claude on a non-Claude host when it is the only reviewer", async () => {
+    const savedHost = process.env.CLAUDECODE;
+    delete process.env.CLAUDECODE;
+    try {
+      for (const name of Object.keys(ADAPTERS) as Array<keyof typeof ADAPTERS>) {
+        if (name === "claude") continue;
+        vi.spyOn(ADAPTERS[name], "probe").mockResolvedValue({ installed: false });
+      }
+      stubAdapter("claude");
+      spawnMock.mockImplementation(() => fakeChild("", "", 0));
+
+      const result = await runReview({
+        skill: "honesty-audit",
+        reviewer: "auto",
+        repo_path: repoDir,
+        isolation: "none",
+      });
+      expect(result.provider).toBe("claude");
+      const [cmd] = spawnMock.mock.calls[0] as [string, string[]];
+      expect(cmd).toBe("claude");
+    } finally {
+      if (savedHost == null) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = savedHost;
+    }
+  });
+
   it("returns the reviewer's exit code in the result", async () => {
-    stubAdapter("gemini");
+    stubAdapter("antigravity");
     spawnMock.mockImplementation(() => fakeChild("done\n", "", 42));
 
     const result = await runReview({
       skill: "deep-review",
-      reviewer: "gemini",
+      reviewer: "antigravity",
       repo_path: repoDir,
       isolation: "none",
     });
 
     expect(result.exitCode).toBe(42);
-    expect(result.provider).toBe("gemini");
+    expect(result.provider).toBe("antigravity");
   });
 
   it("captures delimited artifacts from stdout and writes them under repo_path", async () => {

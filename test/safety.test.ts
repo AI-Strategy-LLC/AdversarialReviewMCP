@@ -59,7 +59,11 @@ describe("validateModel", () => {
     expect(validateModel("anthropic/claude-sonnet-4-6")).toBe(
       "anthropic/claude-sonnet-4-6"
     );
-    expect(validateModel("gemini-2.5-flash")).toBe("gemini-2.5-flash");
+    expect(validateModel("gemini-4-argon-high")).toBe("gemini-4-argon-high");
+    // opencode's provider/model#variant form
+    expect(validateModel("anthropic/claude-opus-5-5#max")).toBe(
+      "anthropic/claude-opus-5-5#max"
+    );
   });
   it("rejects whitespace and shell metacharacters", () => {
     expect(() => validateModel("foo bar")).toThrow(SafetyError);

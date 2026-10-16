@@ -27,32 +27,103 @@ directly.
 
 ## Supported reviewers
 
-| CLI | Binary | Authentication | Read-only sandbox | Ephemeral session |
-|---|---|---|---|---|
-| codex | `codex` | `OPENAI_API_KEY` env or `codex login` | yes (`--sandbox read-only`) | yes (no rollout persist) |
-| gemini | `gemini` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` env or OAuth | no | yes (`--yolo` non-interactive) |
-| opencode | `opencode` | per-provider config | no | no |
-| crush | `crush` | provider key in env or `~/.config/crush/crush.json` | no | yes (`run` subcommand) |
-| kilo | `kilo` | per-config | no | no |
-| glm | `opencode` | Z.AI login via `opencode auth login` | no | no |
+| Reviewer | Binary | Authentication | Read-only sandbox | Ephemeral session | Model selection |
+|---|---|---|---|---|---|
+| codex | `codex` | `OPENAI_API_KEY` env or `codex login` | yes (`--sandbox read-only`) | yes (`--ephemeral`) | `--model` (OpenAI names) |
+| antigravity | `agy` | interactive `agy` sign-in (OS keyring); verified via `agy models` | no | no | `--model` (`agy models` ids: Gemini, Claude, GPT-OSS) |
+| opencode | `opencode` | `opencode auth login`, a provider in `opencode.json`, or the injected local provider | no | no | `--model provider/model[#variant]` |
+| crush | `crush` | provider key in env, `~/.config/crush/crushrc`, or legacy `crush.json` | no | yes (`run` subcommand) | `-m` |
+| kilo | `kilo` | `kilo auth` (OpenCode fork; auth.json / kilo.json probed best-effort) | no | no | `-m provider/model` |
+| glm | `opencode` | Z.AI login via `opencode auth login` | no | no | `--model zai-coding-plan/…` |
+| copilot | `copilot` | `copilot login` (keyring) or `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` | no (`write` tool denied; shell can still write) | no | `--model` (Copilot catalog, or BYOK via `COPILOT_PROVIDER_*`) |
+| claude | `claude` | `claude auth login` (keyring), `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` | no (Edit/Write denied; Bash can still write) | yes (`--no-session-persistence`) | `--model` (`fable`/`opus`/`sonnet`/`haiku` or full id) |
 
-`glm` runs Z.ai's GLM models — a *model*, not a CLI, so it is hosted inside
-the **OpenCode** harness (which has first-class Z.AI support). It behaves like
-the `opencode` reviewer but always targets a GLM model.
+**Antigravity replaced Gemini CLI.** Google stopped serving Gemini CLI for
+AI Pro/Ultra on 2026-06-18; the successor is the Antigravity CLI (`agy`).
+Headless runs use `agy -p … --dangerously-skip-permissions`: without the
+skip flag, print mode *soft-denies* any tool needing approval (exit 0, note
+on stderr), which would silently hollow out a review. The adapter also
+passes `--print-timeout 0` because agy's own default (5 minutes) is shorter
+than a deep review. Default model is `gemini-4-argon-high` so that a Claude
+Code host gets a different model family; override with
+`ADVERSARIAL_REVIEW_ANTIGRAVITY_MODEL` or per call. Antigravity reads skills
+from `<workspace>/.agents/skills/` and `~/.gemini/antigravity-cli/skills/`.
+
+**`glm`** runs Z.ai's GLM models — a *model*, not a CLI, so it is hosted
+inside the **OpenCode** harness. It behaves like the `opencode` reviewer but
+always targets a GLM model.
 
 - **Setup:** `opencode auth login` → choose **Z.AI** (or **Z.AI Coding Plan**
   if subscribed) → paste your key from the Z.AI console. Credentials land in
   `~/.local/share/opencode/auth.json`, which the adapter reads to verify auth.
-- **Model:** defaults to `zai-coding-plan/glm-4.6` (subscription). Pay-as-you-go
-  users export `ADVERSARIAL_REVIEW_GLM_MODEL=zai/glm-4.6`, or pass `model` per
+- **Model:** defaults to `zai-coding-plan/glm-5.3` (subscription). Pay-as-you-go
+  users export `ADVERSARIAL_REVIEW_GLM_MODEL=zai/glm-5.3`, or pass `model` per
   call. opencode requires the provider prefix (`zai-coding-plan/…` or `zai/…`);
-  a bare `glm-4.6` will not route.
-- **Skills:** install the review skills into OpenCode (e.g. `bash install.sh
-  --for opencode` in the AgentSkills repo), same as the `opencode` reviewer.
+  a bare `glm-5.3` will not route.
 
-Pi is intentionally not supported — Pi has no Agent tool and most review
-skills are thin stubs that need one. Pi users should run review skills
-directly in Pi rather than via this server.
+**`claude`** exists for hosts that are *not* Claude Code (Codex, Antigravity,
+Copilot, …). `reviewer='auto'` never picks it when the `CLAUDECODE` env var
+marks a Claude Code host; an explicit `reviewer='claude'` from a Claude host
+is allowed but defeats the purpose of adversarial review.
+
+Pi is intentionally not supported — Pi still has no built-in subagent tool
+(only community extensions) and most review skills need one. Pi users should
+run review skills directly in Pi rather than via this server.
+
+## Choosing a model
+
+Every reviewer accepts an optional `model`. Call **`list_models(reviewer)`**
+first: it returns ids in the exact form the CLI's model flag takes, from
+`opencode models`, `agy models`, or static aliases. Then pass one of them.
+
+### OpenCode: cloud model or local model
+
+OpenCode addresses models as `<provider>/<model>[#variant]`. Three ways to
+get a routable provider:
+
+1. **Logged-in cloud provider** — `opencode auth login` (Anthropic, Google,
+   OpenAI, Z.AI, OpenCode Zen, …) or ambient AWS credentials for
+   `amazon-bedrock/*` (e.g. `amazon-bedrock/us.anthropic.claude-opus-5-5`).
+2. **Provider declared in `~/.config/opencode/opencode.json`** — the normal
+   way to wire a self-hosted OpenAI-compatible server (`"npm":
+   "@ai-sdk/openai-compatible"`, `options.baseURL`, a `models` map). Use its
+   provider id as the prefix.
+3. **Injected local provider** — set on the MCP server's environment:
+
+   ```bash
+   ADVERSARIAL_REVIEW_LOCAL_OPENAI_BASE_URL=http://aivas-a.local:4000/v1  # required; must serve /models and /chat/completions
+   ADVERSARIAL_REVIEW_LOCAL_PROVIDER_ID=local                             # optional; prefix used in `model` (default "local")
+   ADVERSARIAL_REVIEW_LOCAL_OPENAI_API_KEY=sk-…                           # optional; sent as Bearer, placeholder if unset
+   ```
+
+   Any `model` of the form `<provider-id>/<model-id>` (e.g.
+   `local/qwen3.6-35b-nvfp4`, `local/openai/gpt-5.6-cyber` for a proxy that
+   namespaces upstream models) makes the server inject an
+   `@ai-sdk/openai-compatible` provider declaring exactly that model through
+   `OPENCODE_CONFIG_CONTENT`, which OpenCode merges over its file config for
+   that run only. Nothing is written to the user's `opencode.json`.
+   `list_models(reviewer='opencode')` also queries `<base>/models` and lists
+   the ids with the prefix applied. The `#variant` suffix (reasoning effort,
+   e.g. `#max`) is stripped from the injected declaration and passed through
+   to OpenCode.
+
+Headless `opencode run` always gets `--auto` (approve permission asks that
+are not explicitly denied — without it a review blocks or auto-rejects on the
+first `external_directory` ask) and `--standalone` (a private server for the
+run, so the review never shares state with an interactive session).
+
+### Antigravity
+
+`agy models` ids, e.g. `gemini-4-argon-high`, `gemini-3.8-flash-medium`,
+`claude-sonnet-5-5-high`, `gpt-oss-120b-medium`. Pick a non-Claude id when
+the host is Claude.
+
+### Copilot
+
+Copilot catalog names (`gpt-5.4`, `claude-sonnet-4.5`, …). To hit a local
+OpenAI-compatible server instead, set `COPILOT_PROVIDER_BASE_URL`,
+`COPILOT_PROVIDER_TYPE=openai`, `COPILOT_PROVIDER_API_KEY` and
+`COPILOT_MODEL` on the MCP server's environment (Copilot's BYOK contract).
 
 ## Install
 
@@ -64,7 +135,8 @@ cd AdversarialReviewMCP
 bash install.sh                  # build only, print client-wiring snippets
 bash install.sh --for claude     # build + register with Claude Code
 bash install.sh --for codex      # build + register with Codex
-bash install.sh --for claude,codex,gemini,cursor
+bash install.sh --for antigravity # build + register with Antigravity CLI (agy mcp add)
+bash install.sh --for claude,codex,antigravity,copilot,cursor
 ```
 
 ### Self-contained local deploy
@@ -94,8 +166,9 @@ the AgentSkills repo:
 ```bash
 git clone https://github.com/AI-Strategy-LLC/AgentSkills
 cd AgentSkills
-bash install.sh --for codex      # so codex has /deep-review, /honesty-audit, …
-bash install.sh --for gemini
+bash install.sh --for codex        # so codex has /deep-review, /honesty-audit, …
+bash install.sh --for antigravity  # ~/.gemini/antigravity-cli/skills/ (or .agents/skills/ in the repo)
+bash install.sh --for copilot      # ~/.copilot/skills/ (or .agents/skills/ in the repo)
 # etc
 ```
 
@@ -103,9 +176,11 @@ And sign each reviewer CLI in:
 
 ```bash
 codex login        # or export OPENAI_API_KEY
-gemini auth login  # or export GEMINI_API_KEY
-crush              # configure provider in ~/.config/crush/crush.json
-# opencode / kilo: follow their docs
+agy                # sign in once interactively; verify with `agy models`
+copilot login      # or export COPILOT_GITHUB_TOKEN / GH_TOKEN
+crush              # configure a provider in ~/.config/crush/crushrc
+opencode auth login
+# kilo / claude: follow their docs
 ```
 
 ## Architectural-intent injection
@@ -230,6 +305,15 @@ Returns one row per reviewer with `installed`, `version`, `authenticated`,
 `supported_skills`, and a `notes` field describing safety-flag gaps (e.g.
 "no read-only sandbox flag — reviewer runs with whatever permissions the CLI
 grants").
+
+### `list_models({ reviewer })`
+
+Returns `{ reviewer, models[], note? }` — the model references that reviewer
+can route right now, in the exact form its model flag accepts. Backed by
+`opencode models` (opencode, glm — plus the injected local provider's
+`/models` endpoint when configured), `agy models` (antigravity), or static
+aliases (claude). Reviewers with no listing command (codex, copilot, crush,
+kilo) return an empty list and a note.
 
 ### `adversarial_review({ skill, reviewer, repo_path, args?, model?, timeout_s?, ref?, isolation? })`
 
@@ -385,7 +469,8 @@ mcp/adversarial-review/
     safety.ts          # repo allowlist + args/model validators + containment
     adapters/
       _helpers.ts      # shared probe + parse helpers
-      codex.ts gemini.ts opencode.ts crush.ts kilo.ts
+      _opencode.ts     # shared opencode plumbing: model refs, auth, local-provider injection
+      codex.ts antigravity.ts opencode.ts glm.ts crush.ts kilo.ts copilot.ts claude.ts
       index.ts         # ADAPTERS registry
     prompts/
       deep-review.txt branch-review.txt bdd-audit.txt
@@ -397,6 +482,18 @@ mcp/adversarial-review/
       scale/<scale>.md            # personal, small-team, …
   test/adapters/*.test.ts
 ```
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `ADVERSARIAL_REVIEW_ALLOWLIST` | Colon-separated repo paths the server may review |
+| `ADVERSARIAL_REVIEW_LOCAL_OPENAI_BASE_URL` | Base URL of a local OpenAI-compatible server; enables the injected provider for opencode |
+| `ADVERSARIAL_REVIEW_LOCAL_PROVIDER_ID` | Prefix for local models in `model` (default `local`) |
+| `ADVERSARIAL_REVIEW_LOCAL_OPENAI_API_KEY` | Bearer token for the local server (placeholder if unset) |
+| `ADVERSARIAL_REVIEW_ANTIGRAVITY_MODEL` | Default `agy` model (default `gemini-4-argon-high`) |
+| `ADVERSARIAL_REVIEW_GLM_MODEL` | Default GLM model (default `zai-coding-plan/glm-5.3`) |
+| `CLAUDECODE` | Set by Claude Code in its children; makes `auto` skip the `claude` reviewer |
 
 ## Known limitations
 
@@ -416,5 +513,13 @@ mcp/adversarial-review/
   `report_path` will be empty even when a report exists — read the
   `raw_stdout` for the actual path.
 - **`auto` selection is order-deterministic.** First installed +
-  authenticated CLI in the order codex, gemini, crush, opencode, kilo wins.
-  This is intentional (predictable) but doesn't load-balance.
+  authenticated CLI in the order codex, antigravity, copilot, crush,
+  opencode, kilo, glm, claude wins (claude is skipped on a Claude Code
+  host). This is intentional (predictable) but doesn't load-balance.
+- **Auth checks are only as honest as the CLI lets them be.** Antigravity,
+  Copilot and Claude keep logins in the OS keyring. Antigravity is verified
+  by running `agy models`; Copilot and Claude fall back to "assumed" unless
+  an env token or credentials file is present (`verifiesAuth: false` in
+  `list_reviewers` notes).
+- **Kilo's auth/config paths are inferred** from its OpenCode lineage, not
+  documented; a miss is reported as "assumed", never "unauthenticated".
