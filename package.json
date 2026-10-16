@@ -1,6 +1,6 @@
 {
   "name": "adversarial-review-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that dispatches review skills (deep-review, honesty-audit, branch-review, bdd-audit, counter-patterns, coverage-audit) to a different AI CLI than the caller — the load-bearing 20% of the honesty-defense doctrine.",
   "license": "BSD-3-Clause",
   "repository": {

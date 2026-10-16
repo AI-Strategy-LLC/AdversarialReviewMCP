@@ -15,7 +15,7 @@ import {
 import { SafetyError, loadAllowlist } from "./safety.js";
 
 const SERVER_NAME = "adversarial-review";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 
 const ALL_SKILLS: SkillName[] = [...SKILL_NAMES];
 
@@ -120,7 +120,7 @@ async function main(): Promise<void> {
     {
       title: "List reviewer CLIs",
       description:
-        "Probe each external CLI (codex, gemini, opencode, crush, kilo) for installation, version, and ambient authentication. Returns one entry per reviewer.",
+        "Probe each external CLI (codex, antigravity, opencode, crush, kilo, glm, copilot, claude) for installation, version, and ambient authentication. Returns one entry per reviewer.",
       inputSchema: {},
     },
     async () => {
@@ -129,6 +129,37 @@ async function main(): Promise<void> {
       return {
         content: [{ type: "text", text: json }],
       };
+    }
+  );
+
+  server.registerTool(
+    "list_models",
+    {
+      title: "List models a reviewer can route",
+      description:
+        "Enumerate the model references a reviewer CLI accepts for the `model` argument, in the exact form that CLI's model flag expects. Backed by `opencode models` (opencode, glm), `agy models` (antigravity), or static aliases (claude). When ADVERSARIAL_REVIEW_LOCAL_OPENAI_BASE_URL is set, opencode's list also includes '<local-id>/<model>' entries discovered from that server's /models endpoint. Reviewers without a listing command return an empty list and a note.",
+      inputSchema: {
+        reviewer: z.enum(REVIEWER_NAMES).describe("Which reviewer CLI to ask."),
+      },
+    },
+    async ({ reviewer }) => {
+      const adapter = getAdapter(reviewer);
+      if (!adapter.listModels) {
+        const payload = {
+          reviewer,
+          models: [] as string[],
+          note: `${adapter.binary} has no model-listing command; pass the CLI's native model name in \`model\` or omit it to use the CLI's default.`,
+        };
+        return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+      }
+      const probe = await adapter.probe();
+      if (!probe.installed) {
+        const payload = { reviewer, models: [] as string[], note: probe.error ?? "not installed" };
+        return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+      }
+      const listing = await adapter.listModels();
+      const payload = { reviewer, ...listing };
+      return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
     }
   );
 
@@ -141,7 +172,7 @@ async function main(): Promise<void> {
       "Which review skill to run on the reviewer side. Must already be installed in the chosen CLI via `bash install.sh --for <cli>`."
     ),
     reviewer: reviewerEnum.describe(
-      "Which CLI runs the review. 'auto' picks the first installed + authenticated CLI in order: codex, gemini, crush, opencode, kilo, glm."
+      "Which CLI runs the review. 'auto' picks the first installed + authenticated CLI in order: codex, antigravity, copilot, crush, opencode, kilo, glm, claude — and never picks 'claude' when the host is Claude Code."
     ),
     repo_path: z
       .string()
@@ -153,7 +184,9 @@ async function main(): Promise<void> {
     model: z
       .string()
       .optional()
-      .describe("Optional model override for CLIs that accept one."),
+      .describe(
+        "Optional model override for CLIs that accept one. Call list_models(reviewer) to see routable ids. opencode/glm take '<provider>/<model>[#variant]' (e.g. 'amazon-bedrock/us.anthropic.claude-opus-5-5', 'aivas/qwen3.6-35b-nvfp4', or '<local-id>/<model>' for the injected local OpenAI-compatible provider); antigravity takes an `agy models` id (e.g. 'gemini-4-argon-high'); copilot/codex/claude take their native model names."
+      ),
     timeout_s: z
       .number()
       .int()

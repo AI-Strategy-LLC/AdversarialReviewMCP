@@ -1,11 +1,9 @@
-import { readFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type {
   Adapter,
   AuthState,
   BuildCommandInput,
   BuildCommandResult,
+  ModelList,
   ParseOutputInput,
   ProbeResult,
   ParseOutputResult,
@@ -15,6 +13,12 @@ import {
   execProbe,
   parseVersionLine,
 } from "./_helpers.js";
+import {
+  OPENCODE_BINARY,
+  listOpencodeModels,
+  opencodeAuthProviders,
+  opencodeRunArgv,
+} from "./_opencode.js";
 
 // GLM (Z.ai) is a *model*, not a CLI — the review skills only run inside a
 // skill-equipped harness. This reviewer hosts GLM inside the OpenCode CLI,
@@ -23,35 +27,22 @@ import {
 //   zai-coding-plan/*  — GLM Coding Plan subscription (api.z.ai/api/coding/paas/v4)
 //   zai/*              — pay-as-you-go            (api.z.ai/api/paas/v4)
 //   zhipuai/*          — China-mainland           (open.bigmodel.cn/api/paas/v4)
-const BINARY = "opencode";
+const BINARY = OPENCODE_BINARY;
 
 // Applied whenever the caller does not pass an explicit `model`. Coding-plan
 // users keep the default; PAYG users export ADVERSARIAL_REVIEW_GLM_MODEL
-// (e.g. "zai/glm-4.6") or pass `model` per call.
+// (e.g. "zai/glm-5.3") or pass `model` per call. glm-4.6 was retired from
+// the coding plan in 2026; glm-5.3 is the current flagship there.
 const DEFAULT_GLM_MODEL =
-  process.env.ADVERSARIAL_REVIEW_GLM_MODEL || "zai-coding-plan/glm-4.6";
+  process.env.ADVERSARIAL_REVIEW_GLM_MODEL || "zai-coding-plan/glm-5.3";
 
 // Provider ids opencode may store for a Z.AI login, newest naming first.
 const ZAI_PROVIDER_IDS = ["zai-coding-plan", "zai", "z-ai", "zhipuai"];
 
-/**
- * Detect a Z.AI credential configured in OpenCode. `opencode auth login`
- * writes provider credentials to `$XDG_DATA_HOME/opencode/auth.json` (default
- * `~/.local/share/opencode/auth.json`). Returns the matching provider id(s)
- * when a Z.AI entry is present so authCheck can verify rather than assume.
- */
 async function detectZaiAuth(): Promise<string | undefined> {
-  const dataHome =
-    process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
-  const authPath = path.join(dataHome, "opencode", "auth.json");
-  try {
-    const raw = await readFile(authPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const found = ZAI_PROVIDER_IDS.filter((id) => parsed[id] != null);
-    return found.length > 0 ? found.join(", ") : undefined;
-  } catch {
-    return undefined;
-  }
+  const providers = await opencodeAuthProviders();
+  const found = providers.filter((id) => ZAI_PROVIDER_IDS.includes(id));
+  return found.length > 0 ? found.join(", ") : undefined;
 }
 
 export const glmAdapter: Adapter = {
@@ -100,14 +91,24 @@ export const glmAdapter: Adapter = {
     // model id fails because opencode cannot route it. Fall back to the
     // configured default when the caller omits `model`.
     const model = input.model || DEFAULT_GLM_MODEL;
-    const argv = ["run", "--model", model, input.prompt];
     return {
-      argv,
+      argv: opencodeRunArgv(input.prompt, model),
       cwd: input.repoPath,
     };
   },
 
   parseOutput(input: ParseOutputInput): ParseOutputResult {
     return defaultParseOutput(input);
+  },
+
+  async listModels(): Promise<ModelList> {
+    const all = await listOpencodeModels();
+    const zai = all.models.filter((m) =>
+      ZAI_PROVIDER_IDS.some((id) => m.startsWith(`${id}/`))
+    );
+    return {
+      models: zai,
+      note: zai.length === 0 ? (all.note ?? "no Z.AI provider logged in to opencode") : all.note,
+    };
   },
 };

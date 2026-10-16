@@ -11,11 +11,13 @@ export type SkillName = (typeof SKILL_NAMES)[number];
 
 export const REVIEWER_NAMES = [
   "codex",
-  "gemini",
+  "antigravity",
   "opencode",
   "crush",
   "kilo",
   "glm",
+  "copilot",
+  "claude",
 ] as const;
 
 export type ReviewerName = (typeof REVIEWER_NAMES)[number];
@@ -25,14 +27,31 @@ export const ISOLATION_MODES = ["worktree", "none"] as const;
 export type IsolationMode = (typeof ISOLATION_MODES)[number];
 export const DEFAULT_ISOLATION: IsolationMode = "worktree";
 
+/**
+ * Order tried by reviewer='auto'. `claude` is last and is skipped entirely
+ * when the host is Claude Code (CLAUDECODE env var set) — the whole point of
+ * adversarial review is a *different* model than the one that did the work.
+ */
 export const AUTO_FALLBACK_ORDER: ReviewerName[] = [
   "codex",
-  "gemini",
+  "antigravity",
+  "copilot",
   "crush",
   "opencode",
   "kilo",
   "glm",
+  "claude",
 ];
+
+/** Env var Claude Code sets in every child process (incl. MCP servers). */
+export const CLAUDE_HOST_ENV = "CLAUDECODE";
+
+export interface ModelList {
+  /** Model references in the exact form the CLI's model flag accepts. */
+  models: string[];
+  /** Human-readable caveat (e.g. "static aliases only"). */
+  note?: string;
+}
 
 export interface ProbeResult {
   installed: boolean;
@@ -95,6 +114,12 @@ export interface Adapter {
   authCheck(): Promise<AuthState>;
   buildCommand(input: BuildCommandInput): BuildCommandResult;
   parseOutput(input: ParseOutputInput): ParseOutputResult;
+  /**
+   * Enumerate model references the CLI can route right now, in the exact
+   * form `buildCommand({ model })` expects. Optional: CLIs with no model
+   * listing command omit it and `list_models` says so.
+   */
+  listModels?(): Promise<ModelList>;
 }
 
 export interface ReviewerStatus {

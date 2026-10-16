@@ -19,18 +19,28 @@ import {
 const BINARY = "crush";
 
 /**
- * Detect a configured Crush install. Crush resolves global config from
- * `$XDG_CONFIG_HOME/crush/crush.json` (default `~/.config/crush/crush.json`);
- * a non-empty `providers` block means the user has wired up at least one
- * provider (with its key / base URL) without relying on env vars. Returns
- * the configured provider names when present.
+ * Detect a configured Crush install. Crush (>= 0.9x) prefers a bash-style
+ * `$XDG_CONFIG_HOME/crush/crushrc` (`provider add <id> …` lines) and still
+ * reads the legacy JSON `crush.json`. A `providers` block in the JSON, or a
+ * `provider add` line in crushrc, means the user has wired up at least one
+ * provider without relying on env vars. Returns the configured provider
+ * names when present.
  */
 async function detectCrushConfig(): Promise<string[] | undefined> {
   const configHome =
     process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  const configPath = path.join(configHome, "crush", "crush.json");
+  const dir = path.join(configHome, "crush");
   try {
-    const raw = await readFile(configPath, "utf8");
+    const rc = await readFile(path.join(dir, "crushrc"), "utf8");
+    const ids = [...rc.matchAll(/^\s*provider\s+add\s+([A-Za-z0-9_-]+)/gm)].map(
+      (m) => m[1] as string
+    );
+    if (ids.length > 0) return ids;
+  } catch {
+    // no crushrc — fall through to legacy JSON
+  }
+  try {
+    const raw = await readFile(path.join(dir, "crush.json"), "utf8");
     const parsed = JSON.parse(raw) as {
       providers?: Record<string, unknown>;
     };
@@ -85,7 +95,7 @@ export const crushAdapter: Adapter = {
     return {
       authenticated: false,
       detail:
-        "Crush needs a provider API key. Export OPENAI_API_KEY / ANTHROPIC_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY, or configure ~/.config/crush/crush.json.",
+        "Crush needs a provider API key. Export OPENAI_API_KEY / ANTHROPIC_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY, or configure ~/.config/crush/crushrc (or legacy crush.json).",
     };
   },
 

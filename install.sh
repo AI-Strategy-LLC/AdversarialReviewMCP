@@ -6,6 +6,7 @@
 #   bash install.sh                 # build only, print setup snippets
 #   bash install.sh --for claude    # build + register with Claude Code
 #   bash install.sh --for codex     # build + register with Codex
+#   bash install.sh --for antigravity  # build + register with Antigravity CLI (agy mcp add)
 #   bash install.sh --for claude,codex
 #
 # The server is read-only on the repo, ambient-auth (each CLI uses its own
@@ -103,10 +104,24 @@ EOF
   echo "    Appended [mcp_servers.${SERVER_NAME}] to ${cfg}"
 }
 
-register_gemini() {
-  echo "==> Gemini setup (manual)"
+register_antigravity() {
+  echo "==> Registering with Antigravity CLI (agy mcp add)"
+  if ! command -v agy >/dev/null 2>&1; then
+    echo "    agy CLI not on PATH — install Antigravity CLI first (https://antigravity.google/docs/cli/overview)"
+    return
+  fi
+  if agy mcp list 2>/dev/null | grep -q "${SERVER_NAME}"; then
+    echo "    ${SERVER_NAME} already registered; removing and re-adding"
+    agy mcp remove "${SERVER_NAME}" >/dev/null 2>&1 || true
+  fi
+  agy mcp add "${SERVER_NAME}" -- node "${SERVER_ENTRY}"
+  echo "    Registered. Verify with: agy mcp list"
+}
+
+register_copilot() {
+  echo "==> GitHub Copilot CLI setup (manual)"
   cat <<EOF
-    Add to ~/.gemini/settings.json under "mcpServers":
+    Add to ~/.copilot/mcp-config.json under "mcpServers":
 
       "${SERVER_NAME}": {
         "command": "node",
@@ -134,12 +149,13 @@ print_default_summary() {
 
     bash install.sh --for claude       # Claude Code (uses 'claude mcp add')
     bash install.sh --for codex        # Codex (~/.codex/config.toml)
-    bash install.sh --for gemini       # Gemini (prints manual snippet)
+    bash install.sh --for antigravity  # Antigravity CLI (uses 'agy mcp add')
+    bash install.sh --for copilot      # GitHub Copilot CLI (prints manual snippet)
     bash install.sh --for cursor       # Cursor (prints manual snippet)
     bash install.sh --for claude,codex # multiple at once
 
 Reviewer prerequisites (per CLI you intend to use as a *reviewer*):
-  - Install the matching CLI (codex / gemini / opencode / crush / kilo)
+  - Install the matching CLI (codex / agy / opencode / crush / kilo / copilot / claude)
   - Run \`bash <repo>/install.sh --for <cli>\` so the review skills land in
     that CLI's config dir.
   - Sign into that CLI (ambient auth — this MCP server never sees secrets).
@@ -160,10 +176,11 @@ for target in "${TARGET_LIST[@]}"; do
   case "${target}" in
     claude|claude-code) register_claude_code ;;
     codex) register_codex ;;
-    gemini) register_gemini ;;
+    antigravity|agy) register_antigravity ;;
+    copilot) register_copilot ;;
     cursor) register_cursor ;;
     *)
-      echo "Unknown target: ${target} (supported: claude, codex, gemini, cursor)" >&2
+      echo "Unknown target: ${target} (supported: claude, codex, antigravity, copilot, cursor)" >&2
       exit 2
       ;;
   esac
@@ -174,5 +191,6 @@ cat <<EOF
 ==> Done. Verify with:
     - Claude Code: \`claude mcp list\`
     - Codex: open a Codex session and ask it to list its MCP tools
-    - Gemini / Cursor: restart the client to pick up the config change
+    - Antigravity: \`agy mcp list\`
+    - Copilot / Cursor: restart the client to pick up the config change
 EOF

@@ -83,11 +83,13 @@ export const codexAdapter: Adapter = {
   },
 
   buildCommand(input: BuildCommandInput): BuildCommandResult {
+    // --ephemeral: no session files on disk (backs supportsEphemeralSession).
     const argv = [
       "exec",
       "--sandbox",
       "read-only",
       "--skip-git-repo-check",
+      "--ephemeral",
       "--cd",
       input.repoPath,
     ];

@@ -5,7 +5,7 @@ import os from "node:os";
 const MAX_STDOUT_BYTES = 16 * 1024;
 
 const ARGS_SAFE_RE = /^[A-Za-z0-9 _\-./=,:]*$/;
-const MODEL_SAFE_RE = /^[A-Za-z0-9_\-./:@]+$/;
+const MODEL_SAFE_RE = /^[A-Za-z0-9_\-./:@#]+$/;
 
 export class SafetyError extends Error {
   constructor(message: string) {
@@ -55,7 +55,7 @@ export function validateModel(model: string | undefined): string | undefined {
   }
   if (!MODEL_SAFE_RE.test(model)) {
     throw new SafetyError(
-      "model name contains a disallowed character. Allowed: alphanumerics, _ - . / : @"
+      "model name contains a disallowed character. Allowed: alphanumerics, _ - . / : @ #"
     );
   }
   return model;
